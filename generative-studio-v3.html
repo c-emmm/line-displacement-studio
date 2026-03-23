@@ -1,0 +1,2725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generative Studio v3 — Line Reveal</title>
+
+<!-- CDN Libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.18/paper-full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webm-muxer@5.0.1/build/webm-muxer.js"></script>
+
+<!-- Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600;700&family=Inter:wght@400;700&family=Oswald:wght@400;700&family=Playfair+Display:wght@400;700&family=Roboto:wght@400;700&family=Space+Grotesk:wght@400;700&display=swap" rel="stylesheet">
+
+<style>
+/* ─── Design Tokens ─── */
+:root {
+  --bg: #0F172A;
+  --deep: #080D16;
+  --panel: rgba(15, 23, 42, 0.95);
+  --border: rgba(148, 163, 184, 0.12);
+  --border-hover: rgba(148, 163, 184, 0.25);
+  --text: #E2E8F0;
+  --text-dim: #64748B;
+  --text-muted: #475569;
+  --accent: #94A3B8;
+  --accent-bright: #CBD5E1;
+  --panel-width: 300px;
+  --topbar-height: 44px;
+  --timeline-height: 48px;
+}
+
+/* ─── Reset ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Instrument Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ─── Layout ─── */
+#app {
+  display: grid;
+  grid-template-rows: var(--topbar-height) 1fr var(--timeline-height);
+  grid-template-columns: 1fr var(--panel-width);
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ─── Topbar ─── */
+#topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--deep);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  z-index: 100;
+}
+#topbar .logo {
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+  margin-right: auto;
+}
+.tb-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.tb-btn:hover { border-color: var(--border-hover); color: var(--text); }
+.tb-btn.active { border-color: var(--accent); color: var(--accent); }
+.tb-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.5; }
+
+/* ─── Canvas Area ─── */
+#canvas-wrap {
+  position: relative;
+  overflow: hidden;
+  background: var(--deep);
+}
+#mainCanvas {
+  display: block;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* ─── Right Panel ─── */
+#panel {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+#panel::-webkit-scrollbar { width: 4px; }
+#panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Panel sections */
+.section { margin-bottom: 16px; }
+.section-title {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  margin-bottom: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Generic control row */
+.ctrl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ctrl label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.ctrl-val {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--accent);
+  min-width: 36px;
+  text-align: right;
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.15s;
+}
+.ctrl-val:hover {
+  border-color: var(--accent);
+}
+.ctrl-val-input {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--deep);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  width: 48px;
+  text-align: right;
+  padding: 1px 4px;
+  outline: none;
+}
+
+/* Range slider */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  margin: 4px 8px;
+  flex: 1;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+}
+
+/* Buttons / toggles / switches */
+.switch-row {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.switch-btn {
+  flex: 1;
+  padding: 5px 4px;
+  text-align: center;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-right: 1px solid var(--border);
+}
+.switch-btn:last-child { border-right: none; }
+.switch-btn.active { background: rgba(148,163,184,0.1); color: var(--accent-bright); }
+.switch-btn:hover:not(.active) { color: var(--text); }
+
+/* Small button */
+.sm-btn {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sm-btn:hover { border-color: var(--border-hover); color: var(--text); }
+
+/* Select */
+select {
+  width: 100%;
+  padding: 5px 6px;
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  outline: none;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+select:focus { border-color: var(--accent); }
+
+/* Text input / textarea */
+.text-input, textarea {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 12px;
+  outline: none;
+  margin-bottom: 8px;
+  resize: vertical;
+}
+textarea { min-height: 50px; font-size: 13px; }
+.text-input:focus, textarea:focus { border-color: var(--accent); }
+
+/* Number input */
+input[type="number"] {
+  width: 60px;
+  padding: 4px 6px;
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  outline: none;
+  text-align: center;
+}
+input[type="number"]:focus { border-color: var(--accent); }
+input[type="number"]::-webkit-inner-spin-button { opacity: 0.3; }
+
+/* Color picker */
+.color-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.color-ctrl label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  flex: 1;
+}
+input[type="color"] {
+  -webkit-appearance: none;
+  width: 28px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
+
+/* Toggle */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.toggle {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  background: var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle.on { background: var(--accent); }
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--text);
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle.on::after { transform: translateX(14px); }
+
+/* Upload zone */
+.upload-zone {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 8px;
+  position: relative;
+}
+.upload-zone:hover { border-color: var(--accent); color: var(--text); }
+.upload-zone.has-file { border-style: solid; border-color: var(--accent); }
+.upload-zone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.upload-preview {
+  max-width: 100%;
+  max-height: 80px;
+  border-radius: 3px;
+  margin-top: 6px;
+  display: none;
+}
+
+/* 3x3 position grid */
+.pos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  width: 60px;
+  margin-bottom: 8px;
+}
+.pos-cell {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pos-cell.active { background: var(--accent); border-color: var(--accent); }
+.pos-cell:hover:not(.active) { border-color: var(--border-hover); }
+
+/* Preset chips */
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.preset-chip {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.preset-chip:hover { border-color: var(--accent); color: var(--text); }
+
+/* ─── Timeline Bar ─── */
+#timeline {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: var(--deep);
+  border-top: 1px solid var(--border);
+  gap: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+#app.timeline-hidden { grid-template-rows: var(--topbar-height) 1fr 0px; }
+#app.timeline-hidden #timeline { display: none; }
+
+.tl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.tl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tl-btn.active { background: rgba(148,163,184,0.1); border-color: var(--accent); color: var(--accent); }
+
+#tl-time { min-width: 90px; text-align: center; }
+
+#tl-scrub {
+  flex: 1;
+  position: relative;
+  height: 20px;
+  cursor: pointer;
+}
+#tl-track {
+  position: absolute;
+  top: 9px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+#tl-progress {
+  position: absolute;
+  top: 9px;
+  left: 0;
+  width: 0%;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+#tl-head {
+  position: absolute;
+  top: 4px;
+  left: 0%;
+  width: 10px;
+  height: 12px;
+  margin-left: -5px;
+  background: var(--accent-bright);
+  border-radius: 2px;
+  pointer-events: none;
+}
+#tl-duration {
+  width: 40px;
+  background: var(--deep);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  text-align: center;
+  padding: 2px;
+  outline: none;
+}
+
+/* Export dropdown */
+.dropdown-wrap {
+  position: relative;
+}
+.dropdown-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 160px;
+  z-index: 200;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.dropdown-menu.open { display: block; }
+.dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dropdown-item:hover { background: rgba(148,163,184,0.08); color: var(--text); }
+
+/* FPS counter */
+#fps {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* GIF recording progress */
+#gif-progress {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px 32px;
+  text-align: center;
+  z-index: 500;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+#gif-progress .label {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+#gif-bar {
+  width: 200px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#gif-bar-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s;
+}
+</style>
+</head>
+<body>
+
+<!-- ─── App Layout ─── -->
+<div id="app">
+
+  <!-- Topbar -->
+  <div id="topbar">
+    <div class="logo">GENERATIVE STUDIO v3</div>
+
+    <button class="tb-btn" id="btn-share" title="Copy share URL">
+      <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      Share
+    </button>
+
+    <button class="tb-btn active" id="btn-timeline" title="Toggle timeline">
+      <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1"/><line x1="6" y1="7" x2="6" y2="17"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="18" y1="7" x2="18" y2="17"/></svg>
+      Timeline
+    </button>
+
+    <div class="dropdown-wrap">
+      <button class="tb-btn" id="btn-export">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export
+      </button>
+      <div class="dropdown-menu" id="export-menu">
+        <button class="dropdown-item" data-export="svg">SVG (vector)</button>
+        <button class="dropdown-item" data-export="png">PNG</button>
+        <button class="dropdown-item" data-export="gif">GIF (timeline)</button>
+        <button class="dropdown-item" data-export="mp4">MP4 Video</button>
+        <button class="dropdown-item" data-export="pngseq">PNG Sequence (zip)</button>
+        <button class="dropdown-item" data-export="json">Config JSON</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Canvas Area -->
+  <div id="canvas-wrap">
+    <canvas id="mainCanvas"></canvas>
+    <div id="fps"></div>
+  </div>
+
+  <!-- Right Panel -->
+  <div id="panel">
+
+    <!-- Canvas Size -->
+    <div class="section" id="sec-canvas">
+      <div class="section-title">Canvas</div>
+      <select id="sel-canvas-size">
+        <option value="free">Free (fill viewport)</option>
+        <option value="1200x628">LinkedIn Post (1200 x 628)</option>
+        <option value="1920x1080">LinkedIn Video (1920 x 1080)</option>
+        <option value="1080x1080">Instagram Square (1080 x 1080)</option>
+        <option value="1080x1920">Instagram Story (1080 x 1920)</option>
+        <option value="1200x675">Twitter (1200 x 675)</option>
+        <option value="1920x1080">HD 1080p (1920 x 1080)</option>
+        <option value="3840x2160">4K (3840 x 2160)</option>
+        <option value="custom">Custom...</option>
+      </select>
+      <div id="custom-size" style="display:none">
+        <div class="ctrl">
+          <label>Width</label>
+          <input type="number" id="inp-cw" min="100" max="7680" value="1920">
+          <label style="margin:0 4px">x</label>
+          <label>Height</label>
+          <input type="number" id="inp-ch" min="100" max="4320" value="1080">
+        </div>
+      </div>
+    </div>
+
+    <!-- Source -->
+    <div class="section" id="sec-source">
+      <div class="section-title">Source</div>
+      <div class="switch-row" id="sw-source">
+        <button class="switch-btn" data-val="image">Image</button>
+        <button class="switch-btn active" data-val="text">Text</button>
+        <button class="switch-btn" data-val="svg">SVG</button>
+      </div>
+
+      <!-- Image source -->
+      <div id="src-image" style="display:none">
+        <div class="upload-zone" id="zone-image">
+          Drop image or click to upload
+          <input type="file" accept="image/*" id="inp-image">
+          <img class="upload-preview" id="img-preview">
+        </div>
+        <button class="sm-btn" id="btn-clear-img" style="display:none">Clear Image</button>
+      </div>
+
+      <!-- Text source -->
+      <div id="src-text">
+        <textarea id="inp-text" rows="2">AWAKEN</textarea>
+
+        <select id="sel-font">
+          <option value="Instrument Sans">Instrument Sans</option>
+          <option value="Inter">Inter</option>
+          <option value="Bebas Neue">Bebas Neue</option>
+          <option value="Oswald">Oswald</option>
+          <option value="Space Grotesk">Space Grotesk</option>
+          <option value="Playfair Display">Playfair Display</option>
+          <option value="Archivo Black">Archivo Black</option>
+          <option value="Anton">Anton</option>
+          <option value="Roboto">Roboto</option>
+          <option value="DM Mono">DM Mono</option>
+          <option value="custom">Upload font...</option>
+        </select>
+        <input type="file" accept=".ttf,.otf,.woff,.woff2" id="inp-font-file" style="display:none">
+
+        <div class="ctrl">
+          <label>Size</label>
+          <input type="range" id="rng-font-size" min="20" max="800" value="200">
+          <span class="ctrl-val" id="val-font-size">200</span>
+        </div>
+
+        <div class="switch-row" id="sw-weight">
+          <button class="switch-btn" data-val="400">Regular</button>
+          <button class="switch-btn active" data-val="700">Bold</button>
+          <button class="switch-btn" data-val="900">Black</button>
+        </div>
+
+        <div class="switch-row" id="sw-align">
+          <button class="switch-btn" data-val="left">L</button>
+          <button class="switch-btn active" data-val="center">C</button>
+          <button class="switch-btn" data-val="right">R</button>
+        </div>
+
+        <div class="ctrl" style="align-items:start;">
+          <label>Position</label>
+          <div class="pos-grid" id="pos-grid">
+            <div class="pos-cell" data-pos="tl"></div>
+            <div class="pos-cell" data-pos="tc"></div>
+            <div class="pos-cell" data-pos="tr"></div>
+            <div class="pos-cell" data-pos="ml"></div>
+            <div class="pos-cell active" data-pos="mc"></div>
+            <div class="pos-cell" data-pos="mr"></div>
+            <div class="pos-cell" data-pos="bl"></div>
+            <div class="pos-cell" data-pos="bc"></div>
+            <div class="pos-cell" data-pos="br"></div>
+          </div>
+        </div>
+
+        <div class="ctrl">
+          <label>Line Height</label>
+          <input type="range" id="rng-line-height" min="0.6" max="2.0" step="0.05" value="1.1">
+          <span class="ctrl-val" id="val-line-height">1.10</span>
+        </div>
+        <div class="ctrl">
+          <label>Max Width</label>
+          <input type="range" id="rng-max-width" min="0.2" max="1.0" step="0.05" value="0.9">
+          <span class="ctrl-val" id="val-max-width">0.90</span>
+        </div>
+        <div class="ctrl">
+          <label>Spacing</label>
+          <input type="range" id="rng-letter-spacing" min="-20" max="50" value="0">
+          <span class="ctrl-val" id="val-letter-spacing">0</span>
+        </div>
+        <div class="ctrl">
+          <label>Y Offset</label>
+          <input type="range" id="rng-y-offset" min="-200" max="200" value="0">
+          <span class="ctrl-val" id="val-y-offset">0</span>
+        </div>
+      </div>
+
+      <!-- SVG source -->
+      <div id="src-svg" style="display:none">
+        <div class="upload-zone" id="zone-svg">
+          Drop SVG or click to upload
+          <input type="file" accept=".svg" id="inp-svg">
+        </div>
+        <button class="sm-btn" id="btn-clear-svg" style="display:none">Clear SVG</button>
+      </div>
+    </div>
+
+    <!-- Processing -->
+    <div class="section" id="sec-processing">
+      <div class="section-title">Processing</div>
+      <div class="ctrl">
+        <label>Smoothness</label>
+        <input type="range" id="rng-blur" min="0" max="30" value="8">
+        <span class="ctrl-val" id="val-blur">8</span>
+      </div>
+      <div class="ctrl">
+        <label>Contrast</label>
+        <input type="range" id="rng-contrast" min="0" max="4.0" step="0.1" value="1.5">
+        <span class="ctrl-val" id="val-contrast">1.50</span>
+      </div>
+      <div class="ctrl">
+        <label>Brightness</label>
+        <input type="range" id="rng-brightness" min="-100" max="100" value="0">
+        <span class="ctrl-val" id="val-brightness">0</span>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle" id="tog-threshold"></div>
+        <label style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dim)">Threshold</label>
+      </div>
+      <div class="ctrl" id="row-threshold" style="display:none">
+        <label>Value</label>
+        <input type="range" id="rng-threshold" min="0" max="255" value="128">
+        <span class="ctrl-val" id="val-threshold">128</span>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle" id="tog-invert"></div>
+        <label style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dim)">Invert</label>
+      </div>
+    </div>
+
+    <!-- Lines -->
+    <div class="section" id="sec-lines">
+      <div class="section-title">Lines</div>
+      <div class="switch-row" id="sw-dir">
+        <button class="switch-btn active" data-val="horizontal">H</button>
+        <button class="switch-btn" data-val="vertical">V</button>
+        <button class="switch-btn" data-val="diagonal">D</button>
+      </div>
+      <div class="ctrl">
+        <label>Count</label>
+        <input type="range" id="rng-count" min="10" max="300" value="80">
+        <span class="ctrl-val" id="val-count">80</span>
+      </div>
+      <div class="ctrl">
+        <label>Detail</label>
+        <input type="range" id="rng-detail" min="50" max="500" value="200">
+        <span class="ctrl-val" id="val-detail">200</span>
+      </div>
+      <div class="ctrl">
+        <label>Min Weight</label>
+        <input type="range" id="rng-wmin" min="0" max="10" step="0.1" value="0.5">
+        <span class="ctrl-val" id="val-wmin">0.5</span>
+      </div>
+      <div class="ctrl">
+        <label>Gap</label>
+        <input type="range" id="rng-gap" min="0" max="20" step="0.5" value="1">
+        <span class="ctrl-val" id="val-gap">1.0</span>
+      </div>
+      <div class="ctrl" style="opacity:0.5;pointer-events:none;">
+        <label>Max Weight</label>
+        <span class="ctrl-val" id="val-wmax-auto">&mdash;</span>
+      </div>
+    </div>
+
+    <!-- Animation -->
+    <div class="section" id="sec-anim">
+      <div class="section-title">Animation</div>
+      <div class="ctrl">
+        <label>Reveal</label>
+        <input type="range" id="rng-reveal" min="0" max="1" step="0.01" value="1.0">
+        <span class="ctrl-val" id="val-reveal">1.00</span>
+      </div>
+      <div class="ctrl">
+        <label>Scroll Offset</label>
+        <input type="range" id="rng-scroll-offset" min="-500" max="500" value="0">
+        <span class="ctrl-val" id="val-scroll-offset">0</span>
+      </div>
+      <div style="display:flex;gap:4px;margin:8px 0;">
+        <button class="sm-btn" id="btn-set-start" style="flex:1;text-align:center;">&#x2B24; Set as START</button>
+        <button class="sm-btn" id="btn-set-end" style="flex:1;text-align:center;">&#x2B24; Set as END</button>
+      </div>
+      <div style="font-size:9px;color:var(--text-muted);font-family:'DM Mono',monospace;margin-bottom:4px;" id="anim-status">
+        No animation set. Adjust parameters then click Set as START / END.
+      </div>
+    </div>
+
+    <!-- Presets -->
+    <div class="section" id="sec-presets">
+      <div class="section-title">Presets</div>
+      <div class="preset-row">
+        <button class="preset-chip" data-preset="reveal">Reveal In</button>
+        <button class="preset-chip" data-preset="scroll">Scroll Loop</button>
+        <button class="preset-chip" data-preset="breathe">Breathe</button>
+        <button class="preset-chip" data-preset="dramatic">Dramatic</button>
+        <button class="preset-chip" data-preset="peek">Peek</button>
+      </div>
+    </div>
+
+    <!-- Color -->
+    <div class="section" id="sec-color">
+      <div class="section-title">Color</div>
+      <div class="color-ctrl">
+        <label>Line Color</label>
+        <input type="color" id="clr-line" value="#F5A623">
+      </div>
+      <div class="color-ctrl">
+        <label>Background</label>
+        <input type="color" id="clr-bg" value="#0F172A">
+      </div>
+    </div>
+
+    <!-- Export Settings -->
+    <div class="section" id="sec-export">
+      <div class="section-title">Export</div>
+      <div class="ctrl">
+        <label>Scale</label>
+        <select id="sel-export-scale" style="width:auto;flex:1;margin:0 0 0 8px;">
+          <option value="1">1x (canvas size)</option>
+          <option value="2" selected>2x</option>
+          <option value="4">4x</option>
+          <option value="8">8x (max quality)</option>
+        </select>
+      </div>
+      <div class="ctrl">
+        <label>Video FPS</label>
+        <select id="sel-gif-fps" style="width:auto;flex:1;margin:0 0 0 8px;">
+          <option value="15">15 fps</option>
+          <option value="24">24 fps</option>
+          <option value="30" selected>30 fps</option>
+          <option value="60">60 fps</option>
+        </select>
+        <div style="font-size:9px;color:var(--text-muted);font-family:'DM Mono',monospace;margin-top:2px;">
+          Applies to GIF, Video, and PNG Sequence exports
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /panel -->
+
+  <!-- Timeline Bar -->
+  <div id="timeline">
+    <button class="tl-btn" id="tl-play" title="Play/Pause">&#9654;</button>
+    <button class="tl-btn" id="tl-stop" title="Stop/Reset">&#9632;</button>
+    <span id="tl-time">0:00 / 3.0s</span>
+    <div id="tl-scrub">
+      <div id="tl-track"></div>
+      <div id="tl-progress"></div>
+      <div id="tl-head"></div>
+    </div>
+    <button class="tl-btn" id="tl-loop" title="Loop">&#x1F501;</button>
+    <input type="number" id="tl-duration" value="3.0" min="0.5" max="30" step="0.5" title="Duration (sec)">
+    <span style="font-size:9px">sec</span>
+  </div>
+
+</div><!-- /app -->
+
+<!-- GIF encoding progress -->
+<div id="gif-progress">
+  <div class="label" id="gif-label">Capturing frames...</div>
+  <div id="gif-bar"><div id="gif-bar-fill"></div></div>
+  <button class="sm-btn" id="gif-cancel" style="margin-top:12px">Cancel</button>
+</div>
+
+<!-- Hidden elements -->
+<canvas id="srcCanvas" style="display:none"></canvas>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// GENERATIVE STUDIO v3 — Line Reveal Tool
+// ═══════════════════════════════════════════════════════════════
+
+'use strict';
+
+// ─── State ───
+const S = {
+  canvasWidth: 0,
+  canvasHeight: 0,
+  source: 'text',
+  textContent: 'AWAKEN',
+  textFont: 'Instrument Sans',
+  textFontSize: 200,
+  textFontWeight: '700',
+  textAlign: 'center',
+  textVAlign: 'center',
+  textLineHeight: 1.1,
+  textLetterSpacing: 0,
+  textYOffset: 0,
+  textMaxWidth: 0.9,
+  blur: 8,
+  contrast: 1.5,
+  brightness: 0,
+  threshold: false,
+  thresholdValue: 128,
+  invert: false,
+  lineDir: 'horizontal',
+  lineCount: 80,
+  lineDetail: 200,
+  weightMin: 0.5,
+  weightMax: 8.0,
+  gap: 1,
+  reveal: 1.0,
+  scrollOffset: 0,
+  lineColor: '#F5A623',
+  bgColor: '#0F172A',
+};
+
+// Animatable keys for the timeline
+const ANIMATABLE = [
+  'reveal','scrollOffset','weightMin','gap','blur','contrast','lineCount'
+];
+
+// ─── DOM refs ───
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+const app = $('#app');
+const mainCanvas = $('#mainCanvas');
+const ctx = mainCanvas.getContext('2d');
+const srcCanvas = $('#srcCanvas');
+const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+const canvasWrap = $('#canvas-wrap');
+const fpsEl = $('#fps');
+
+// ─── Global state ───
+let brightness = null;      // Float32Array, brightness lookup (0-1)
+let bW = 0, bH = 0;        // brightness map dimensions
+let lines = [];             // generated lines: [{points:[{x,y,w},...]}]
+let t = 0;                  // animation time (seconds)
+let lastFrame = 0;
+let animId = null;
+let W = 0, H = 0;          // current canvas dimensions
+
+// Source data
+let srcImage = null;        // loaded Image element
+let srcSVG = null;          // loaded SVG string
+let customFont = null;      // uploaded font (opentype.js font object)
+
+// Timeline state
+let tlPlaying = false;
+let tlTime = 0;         // current position in seconds
+let tlDuration = 3.0;
+let tlLoop = false;
+let animStart = null;    // { reveal, scrollOffset, weightMin, gap, blur, contrast, lineCount }
+let animEnd = null;      // same shape
+
+// FPS tracking
+let fpsFrames = 0, fpsLast = 0, fpsVal = 0;
+
+// ═══════════════════════════════════════════════════════════════
+// SOURCE RENDERING — text/image/svg → hidden canvas → brightness
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Render the current source to the hidden canvas,
+ * then process it to produce the brightness lookup.
+ */
+function updateSource() {
+  // Set source canvas size based on main canvas (limited for performance)
+  const maxDim = 800;
+  const aspect = W / H;
+  if (aspect >= 1) {
+    bW = Math.min(W, maxDim);
+    bH = Math.round(bW / aspect);
+  } else {
+    bH = Math.min(H, maxDim);
+    bW = Math.round(bH * aspect);
+  }
+  srcCanvas.width = bW;
+  srcCanvas.height = bH;
+
+  // Clear to black (dark = thin lines, light = thick lines for invert=false)
+  srcCtx.fillStyle = '#000';
+  srcCtx.fillRect(0, 0, bW, bH);
+
+  if (S.source === 'text') {
+    renderText();
+  } else if (S.source === 'image' && srcImage) {
+    renderImage();
+  } else if (S.source === 'svg' && srcSVG) {
+    renderSVGSource();
+    // SVG loads async — processing happens in its onload callback
+    return;
+  }
+
+  // Apply processing (sync sources only — SVG returns above)
+  applyProcessing();
+
+  // Extract brightness
+  extractBrightness();
+}
+
+/** Render text to srcCanvas */
+function renderText() {
+  const text = S.textContent;
+  if (!text.trim()) return;
+
+  srcCtx.fillStyle = '#fff';
+  srcCtx.textBaseline = 'alphabetic';
+
+  const fontSize = S.textFontSize * (bW / W);
+  const weight = S.textFontWeight;
+  srcCtx.font = `${weight} ${fontSize}px "${S.textFont}", sans-serif`;
+
+  if (S.textLetterSpacing) {
+    srcCtx.letterSpacing = `${S.textLetterSpacing * (bW / W)}px`;
+  } else {
+    srcCtx.letterSpacing = '0px';
+  }
+
+  const maxW = bW * S.textMaxWidth;
+  const lines = text.split('\n');
+  const lineH = fontSize * S.textLineHeight;
+  const totalH = lines.length * lineH;
+
+  // Vertical alignment
+  let startY;
+  const vAlign = S.textVAlign;
+  if (vAlign === 'top') startY = lineH;
+  else if (vAlign === 'bottom') startY = bH - totalH + lineH;
+  else startY = (bH - totalH) / 2 + lineH; // center
+
+  startY += S.textYOffset * (bH / H);
+
+  // Horizontal alignment
+  let align = S.textAlign;
+  srcCtx.textAlign = align;
+  let baseX;
+  if (align === 'left') baseX = (bW - maxW) / 2;
+  else if (align === 'right') baseX = (bW + maxW) / 2;
+  else baseX = bW / 2;
+
+  for (let i = 0; i < lines.length; i++) {
+    srcCtx.fillText(lines[i], baseX, startY + i * lineH, maxW);
+  }
+}
+
+/** Render uploaded image to srcCanvas */
+function renderImage() {
+  const iw = srcImage.naturalWidth;
+  const ih = srcImage.naturalHeight;
+  const scale = Math.min(bW / iw, bH / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  srcCtx.drawImage(srcImage, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
+}
+
+/** Render SVG string to srcCanvas */
+function renderSVGSource() {
+  if (!srcSVG) return;
+  const img = new Image();
+  const blob = new Blob([srcSVG], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    // Fill white background so transparent SVGs render properly
+    srcCtx.fillStyle = '#fff';
+    srcCtx.fillRect(0, 0, bW, bH);
+    const iw = img.naturalWidth || bW;
+    const ih = img.naturalHeight || bH;
+    const scale = Math.min(bW / iw, bH / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    srcCtx.drawImage(img, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
+    URL.revokeObjectURL(url);
+    applyProcessing();
+    extractBrightness();
+    generateLines();
+  };
+  img.src = url;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IMAGE PROCESSING — blur, contrast, brightness, threshold
+// ═══════════════════════════════════════════════════════════════
+
+/** Apply blur, contrast, brightness, threshold, invert to srcCanvas */
+function applyProcessing() {
+  // Use built-in canvas filter for contrast and brightness
+  // Then manual box blur for the gaussian approximation
+  if (S.contrast !== 1.0 || S.brightness !== 0) {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = bW;
+    tempCanvas.height = bH;
+    const tCtx = tempCanvas.getContext('2d');
+    tCtx.filter = `contrast(${S.contrast}) brightness(${1 + S.brightness / 100})`;
+    tCtx.drawImage(srcCanvas, 0, 0);
+    srcCtx.drawImage(tempCanvas, 0, 0);
+  }
+
+  // Box blur (3 passes approximates Gaussian)
+  if (S.blur > 0) {
+    const r = Math.round(S.blur * (bW / W) * 1.5) || 1;
+    boxBlur(srcCtx, bW, bH, r, 3);
+  }
+
+  // Threshold & invert via pixel manipulation
+  if (S.threshold || S.invert) {
+    const imgData = srcCtx.getImageData(0, 0, bW, bH);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      let v = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+      if (S.threshold) v = v >= S.thresholdValue ? 255 : 0;
+      if (S.invert) v = 255 - v;
+      d[i] = d[i+1] = d[i+2] = v;
+    }
+    srcCtx.putImageData(imgData, 0, 0);
+  }
+}
+
+/** Box blur — fast horizontal/vertical pass */
+function boxBlur(ctx, w, h, r, passes) {
+  for (let p = 0; p < passes; p++) {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const src = new Uint8ClampedArray(imgData.data);
+    const dst = imgData.data;
+
+    // Horizontal pass
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let rr = 0, gg = 0, bb = 0, count = 0;
+        for (let dx = -r; dx <= r; dx++) {
+          const sx = Math.min(w - 1, Math.max(0, x + dx));
+          const idx = (y * w + sx) * 4;
+          rr += src[idx];
+          gg += src[idx + 1];
+          bb += src[idx + 2];
+          count++;
+        }
+        const idx = (y * w + x) * 4;
+        dst[idx] = rr / count;
+        dst[idx + 1] = gg / count;
+        dst[idx + 2] = bb / count;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // Vertical pass
+    const imgData2 = ctx.getImageData(0, 0, w, h);
+    const src2 = new Uint8ClampedArray(imgData2.data);
+    const dst2 = imgData2.data;
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) {
+        let rr = 0, gg = 0, bb = 0, count = 0;
+        for (let dy = -r; dy <= r; dy++) {
+          const sy = Math.min(h - 1, Math.max(0, y + dy));
+          const idx = (sy * w + x) * 4;
+          rr += src2[idx];
+          gg += src2[idx + 1];
+          bb += src2[idx + 2];
+          count++;
+        }
+        const idx = (y * w + x) * 4;
+        dst2[idx] = rr / count;
+        dst2[idx + 1] = gg / count;
+        dst2[idx + 2] = bb / count;
+      }
+    }
+    ctx.putImageData(imgData2, 0, 0);
+  }
+}
+
+/** Extract brightness map from srcCanvas into Float32Array */
+function extractBrightness() {
+  const imgData = srcCtx.getImageData(0, 0, bW, bH);
+  const d = imgData.data;
+  brightness = new Float32Array(bW * bH);
+  for (let i = 0; i < brightness.length; i++) {
+    const idx = i * 4;
+    brightness[i] = (d[idx] * 0.299 + d[idx+1] * 0.587 + d[idx+2] * 0.114) / 255;
+  }
+}
+
+/** Sample brightness at normalized coordinates (0-1) with bilinear interpolation */
+function sampleBrightness(nx, ny) {
+  if (!brightness) return 0;
+  const fx = nx * (bW - 1);
+  const fy = ny * (bH - 1);
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = Math.min(x0 + 1, bW - 1);
+  const y1 = Math.min(y0 + 1, bH - 1);
+  const dx = fx - x0;
+  const dy = fy - y0;
+
+  const a = brightness[y0 * bW + x0];
+  const b = brightness[y0 * bW + x1];
+  const c = brightness[y1 * bW + x0];
+  const d = brightness[y1 * bW + x1];
+
+  return a * (1 - dx) * (1 - dy) + b * dx * (1 - dy) + c * (1 - dx) * dy + d * dx * dy;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LINE GENERATION
+// ═══════════════════════════════════════════════════════════════
+
+/** Generate all lines based on current state */
+function generateLines() {
+  lines = [];
+  if (!brightness) return;
+
+  const count = Math.round(S.lineCount);
+  const detail = Math.round(S.lineDetail);
+  const dir = S.lineDir;
+
+  if (dir === 'horizontal') {
+    generateHorizontal(count, detail);
+  } else if (dir === 'vertical') {
+    generateVertical(count, detail);
+  } else if (dir === 'diagonal') {
+    generateDiagonal(count, detail);
+  }
+}
+
+function generateHorizontal(count, detail) {
+  const spacing = H / count;
+  for (let i = 0; i < count; i++) {
+    let baseY = spacing * (i + 0.5) + S.scrollOffset;
+    // Wrap for seamless scrolling
+    if (S.scrollOffset !== 0) {
+      baseY = ((baseY % H) + H) % H;
+    }
+    const pts = [];
+    for (let j = 0; j <= detail; j++) {
+      const nx = j / detail;
+      const ny = baseY / H;
+      const b = sampleBrightness(nx, ny);
+      const w = S.weightMin + (1 - b) * (S.weightMax - S.weightMin) * S.reveal;
+      pts.push({ x: nx * W, y: baseY, w: Math.max(0.01, w) });
+    }
+    lines.push({ points: pts });
+  }
+}
+
+function generateVertical(count, detail) {
+  const spacing = W / count;
+  for (let i = 0; i < count; i++) {
+    let baseX = spacing * (i + 0.5) + S.scrollOffset;
+    if (S.scrollOffset !== 0) {
+      baseX = ((baseX % W) + W) % W;
+    }
+    const pts = [];
+    for (let j = 0; j <= detail; j++) {
+      const ny = j / detail;
+      const nx = baseX / W;
+      const b = sampleBrightness(nx, ny);
+      const w = S.weightMin + (1 - b) * (S.weightMax - S.weightMin) * S.reveal;
+      pts.push({ x: baseX, y: ny * H, w: Math.max(0.01, w) });
+    }
+    lines.push({ points: pts });
+  }
+}
+
+function generateDiagonal(count, detail) {
+  // Lines run at 45 degrees. We need enough lines to cover the full canvas.
+  // The diagonal span is W + H. Lines are spaced perpendicular to 45deg.
+  const diagLen = Math.sqrt(W * W + H * H);
+  const perpSpan = (W + H) / Math.SQRT2;  // perpendicular coverage
+  const spacing = perpSpan / count;
+  const dirX = 1 / Math.SQRT2;
+  const dirY = 1 / Math.SQRT2;
+  const normX = -dirY;
+  const normY = dirX;
+
+  for (let i = 0; i < count; i++) {
+    // Center of line strip perpendicular offset
+    let perpOff = spacing * (i + 0.5) - perpSpan / 2 + S.scrollOffset / Math.SQRT2;
+    if (S.scrollOffset !== 0) {
+      perpOff = ((perpOff % perpSpan) + perpSpan) % perpSpan - perpSpan / 2;
+    }
+    const centerX = W / 2 + normX * perpOff;
+    const centerY = H / 2 + normY * perpOff;
+
+    const pts = [];
+    for (let j = 0; j <= detail; j++) {
+      const frac = (j / detail - 0.5) * diagLen;
+      const x = centerX + dirX * frac;
+      const y = centerY + dirY * frac;
+      const nx = Math.max(0, Math.min(1, x / W));
+      const ny = Math.max(0, Math.min(1, y / H));
+      const b = sampleBrightness(nx, ny);
+      const w = S.weightMin + (1 - b) * (S.weightMax - S.weightMin) * S.reveal;
+      pts.push({ x, y, w: Math.max(0.01, w) });
+    }
+    lines.push({ points: pts });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDERING — lines as filled polygons
+// ═══════════════════════════════════════════════════════════════
+
+/** Clear canvas and draw all lines */
+function render() {
+  ctx.fillStyle = S.bgColor;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = S.lineColor;
+
+  for (let i = 0; i < lines.length; i++) {
+    drawLine(ctx, lines[i].points);
+  }
+}
+
+/**
+ * Draw a single line as a filled polygon.
+ * Each point has {x, y, w} — offset perpendicular by +/- w/2
+ * to form upper and lower edges, then close into a polygon.
+ */
+function drawLine(ctx, points) {
+  if (points.length < 2) return;
+
+  const upper = new Array(points.length);
+  const lower = new Array(points.length);
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const hw = p.w / 2;
+    let nx, ny;
+
+    if (i < points.length - 1) {
+      const dx = points[i + 1].x - p.x;
+      const dy = points[i + 1].y - p.y;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      nx = -dy / len;
+      ny = dx / len;
+    } else {
+      const dx = p.x - points[i - 1].x;
+      const dy = p.y - points[i - 1].y;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      nx = -dy / len;
+      ny = dx / len;
+    }
+
+    upper[i] = { x: p.x + nx * hw, y: p.y + ny * hw };
+    lower[i] = { x: p.x - nx * hw, y: p.y - ny * hw };
+  }
+
+  ctx.beginPath();
+  // Upper edge — forward with quadratic smoothing
+  ctx.moveTo(upper[0].x, upper[0].y);
+  for (let i = 1; i < upper.length; i++) {
+    const prev = upper[i - 1];
+    const cur = upper[i];
+    ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + cur.x) / 2, (prev.y + cur.y) / 2);
+  }
+  // Connect to last upper point explicitly
+  ctx.lineTo(upper[upper.length - 1].x, upper[upper.length - 1].y);
+
+  // Lower edge — backward
+  ctx.lineTo(lower[lower.length - 1].x, lower[lower.length - 1].y);
+  for (let i = lower.length - 2; i >= 0; i--) {
+    const prev = lower[i + 1];
+    const cur = lower[i];
+    ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + cur.x) / 2, (prev.y + cur.y) / 2);
+  }
+  ctx.lineTo(lower[0].x, lower[0].y);
+
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ANIMATION LOOP
+// ═══════════════════════════════════════════════════════════════
+
+function frame(now) {
+  animId = requestAnimationFrame(frame);
+
+  if (!lastFrame) { lastFrame = now; return; }
+  const dt = Math.min(now - lastFrame, 50); // cap at 50ms to avoid spiral
+  lastFrame = now;
+  t += dt / 1000;
+
+  // FPS counter
+  fpsFrames++;
+  if (now - fpsLast > 500) {
+    fpsVal = Math.round(fpsFrames / ((now - fpsLast) / 1000));
+    fpsLast = now;
+    fpsFrames = 0;
+    fpsEl.textContent = fpsVal + ' fps';
+  }
+
+  let needRegen = false;
+
+  // Timeline playback
+  if (tlPlaying && animStart && animEnd) {
+    tlTime += dt / 1000;
+    if (tlTime >= tlDuration) {
+      if (tlLoop) {
+        tlTime = tlTime % tlDuration;
+      } else {
+        tlTime = tlDuration;
+        tlPlaying = false;
+        $('#tl-play').innerHTML = '&#9654;';
+      }
+    }
+    applyTimeline(tlTime);
+    updateTimelineUI();
+    needRegen = true;
+  }
+
+  if (needRegen) generateLines();
+  render();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUTO MAX WEIGHT — derived from count + gap
+// ═══════════════════════════════════════════════════════════════
+
+function calcMaxWeight() {
+  let span;
+  if (S.lineDir === 'horizontal') span = H;
+  else if (S.lineDir === 'vertical') span = W;
+  else span = (W + H) / Math.SQRT2;
+
+  const perLine = span / S.lineCount;
+  S.weightMax = Math.max(0.1, perLine - S.gap);
+
+  const el = document.getElementById('val-wmax-auto');
+  if (el) el.textContent = S.weightMax.toFixed(1);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CANVAS SIZING
+// ═══════════════════════════════════════════════════════════════
+
+function resizeCanvas() {
+  const wrap = canvasWrap;
+  const wrapW = wrap.clientWidth;
+  const wrapH = wrap.clientHeight;
+
+  if (S.canvasWidth === 0 && S.canvasHeight === 0) {
+    // Free mode — fill viewport
+    W = wrapW;
+    H = wrapH;
+    mainCanvas.style.width = W + 'px';
+    mainCanvas.style.height = H + 'px';
+  } else {
+    // Fixed size — fit within wrap while preserving aspect
+    const cw = S.canvasWidth;
+    const ch = S.canvasHeight;
+    const scale = Math.min(wrapW / cw, wrapH / ch, 1);
+    W = cw;
+    H = ch;
+    mainCanvas.style.width = Math.round(cw * scale) + 'px';
+    mainCanvas.style.height = Math.round(ch * scale) + 'px';
+  }
+
+  mainCanvas.width = W;
+  mainCanvas.height = H;
+
+  updateSource();
+  calcMaxWeight();
+  generateLines();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TIMELINE — keyframe animation system
+// ═══════════════════════════════════════════════════════════════
+
+function captureState() {
+  const snap = {};
+  for (const k of ANIMATABLE) snap[k] = S[k];
+  return snap;
+}
+
+function setStart() {
+  animStart = captureState();
+  updateAnimStatus();
+}
+
+function setEnd() {
+  animEnd = captureState();
+  updateAnimStatus();
+}
+
+function updateAnimStatus() {
+  const el = document.getElementById('anim-status');
+  if (animStart && animEnd) {
+    el.textContent = 'START and END set. Use timeline to preview and export.';
+    el.style.color = 'var(--accent)';
+  } else if (animStart) {
+    el.textContent = 'START set. Now adjust parameters and click Set as END.';
+    el.style.color = 'var(--text-dim)';
+  } else if (animEnd) {
+    el.textContent = 'END set. Adjust parameters and click Set as START.';
+    el.style.color = 'var(--text-dim)';
+  } else {
+    el.textContent = 'No animation set. Adjust parameters then click Set as START / END.';
+    el.style.color = 'var(--text-muted)';
+  }
+}
+
+function applyTimeline(time) {
+  if (!animStart || !animEnd) return;
+
+  const frac = tlDuration > 0 ? Math.max(0, Math.min(1, time / tlDuration)) : 0;
+  // Smoothstep easing
+  const ease = frac * frac * (3 - 2 * frac);
+
+  for (const k of ANIMATABLE) {
+    const a = animStart[k];
+    const b = animEnd[k];
+    if (typeof a === 'number' && typeof b === 'number') {
+      S[k] = a + (b - a) * ease;
+    }
+  }
+  syncUIFromState();
+}
+
+function updateTimelineUI() {
+  const pct = (tlTime / tlDuration) * 100;
+  $('#tl-progress').style.width = pct + '%';
+  $('#tl-head').style.left = pct + '%';
+  const m = Math.floor(tlTime / 60);
+  const s = (tlTime % 60).toFixed(1);
+  $('#tl-time').textContent = `${m}:${s.padStart(4, '0')} / ${tlDuration.toFixed(1)}s`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PRESETS — timeline animation presets
+// ═══════════════════════════════════════════════════════════════
+
+const PRESETS = {
+  reveal: () => {
+    animStart = { reveal: 0, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    animEnd = { reveal: 1, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    tlDuration = 2.0;
+    $('#tl-duration').value = tlDuration;
+    updateAnimStatus();
+    resetTimeline();
+  },
+  scroll: () => {
+    const spacing = (S.lineDir === 'horizontal' ? H : W) / S.lineCount;
+    animStart = { reveal: 1, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    animEnd = { reveal: 1, scrollOffset: spacing, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    tlDuration = 2.0;
+    tlLoop = true;
+    $('#tl-loop').classList.add('active');
+    $('#tl-duration').value = tlDuration;
+    updateAnimStatus();
+    resetTimeline();
+  },
+  breathe: () => {
+    animStart = { reveal: 0.7, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    animEnd = { reveal: 1.0, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    tlDuration = 2.0;
+    tlLoop = true;
+    $('#tl-loop').classList.add('active');
+    $('#tl-duration').value = tlDuration;
+    updateAnimStatus();
+    resetTimeline();
+  },
+  dramatic: () => {
+    animStart = { reveal: 0, scrollOffset: 0, weightMin: 0, gap: S.gap, blur: 20, contrast: S.contrast, lineCount: S.lineCount };
+    animEnd = { reveal: 1, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    tlDuration = 3.0;
+    $('#tl-duration').value = tlDuration;
+    updateAnimStatus();
+    resetTimeline();
+  },
+  peek: () => {
+    animStart = { reveal: 0, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    animEnd = { reveal: 0.6, scrollOffset: 0, weightMin: S.weightMin, gap: S.gap, blur: S.blur, contrast: S.contrast, lineCount: S.lineCount };
+    tlDuration = 1.5;
+    $('#tl-duration').value = tlDuration;
+    updateAnimStatus();
+    resetTimeline();
+  },
+};
+
+function resetTimeline() {
+  tlTime = 0;
+  tlPlaying = false;
+  $('#tl-play').innerHTML = '&#9654;';
+  updateTimelineUI();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EXPORT — SVG, PNG, GIF, PNG sequence, JSON
+// ═══════════════════════════════════════════════════════════════
+
+/** Export SVG — smooth filled polygons with Paper.js simplification */
+function exportSVG() {
+  generateLines();
+
+  let paths = '';
+  for (const line of lines) {
+    const pts = line.points;
+    if (pts.length < 2) continue;
+
+    // Build upper and lower edges from per-point weight
+    const upper = [];
+    const lower = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const hw = p.w / 2;
+      let nx, ny;
+      if (i < pts.length - 1) {
+        const dx = pts[i + 1].x - p.x;
+        const dy = pts[i + 1].y - p.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        nx = -dy / len; ny = dx / len;
+      } else {
+        const dx = p.x - pts[i - 1].x;
+        const dy = p.y - pts[i - 1].y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        nx = -dy / len; ny = dx / len;
+      }
+      upper.push({ x: p.x + nx * hw, y: p.y + ny * hw });
+      lower.push({ x: p.x - nx * hw, y: p.y - ny * hw });
+    }
+
+    // Combine into a closed polygon and simplify with Paper.js
+    const allPts = [...upper, ...lower.reverse()];
+    let d = '';
+    try {
+      const paperPath = new paper.Path();
+      for (const pt of allPts) paperPath.add(new paper.Point(pt.x, pt.y));
+      paperPath.closePath();
+      paperPath.simplify(2.0); // higher tolerance = fewer points, cleaner curves
+      d = paperPath.pathData;
+      paperPath.remove();
+    } catch (e) {
+      d = 'M' + allPts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('L') + 'Z';
+    }
+
+    paths += `  <path d="${d}" fill="${S.lineColor}"/>\n`;
+  }
+
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <rect width="${W}" height="${H}" fill="${S.bgColor}"/>
+${paths}</svg>`;
+
+  downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), 'line-reveal.svg');
+}
+
+/** Export PNG at given scale */
+function exportPNG(scale) {
+  const offscreen = document.createElement('canvas');
+  offscreen.width = W * scale;
+  offscreen.height = H * scale;
+  const oCtx = offscreen.getContext('2d');
+  oCtx.scale(scale, scale);
+  oCtx.fillStyle = S.bgColor;
+  oCtx.fillRect(0, 0, W, H);
+  oCtx.fillStyle = S.lineColor;
+  for (const line of lines) drawLine(oCtx, line.points);
+
+  offscreen.toBlob(blob => {
+    downloadBlob(blob, `line-reveal-${scale}x.png`);
+  }, 'image/png');
+}
+
+let gifCancelled = false;
+
+/** Export GIF using gif.js — plays through the timeline */
+function exportGIF() {
+  if (!animStart || !animEnd) {
+    alert('Set START and END states first.');
+    return;
+  }
+
+  const fps = parseInt($('#sel-gif-fps').value) || 30;
+  const scale = parseInt($('#sel-export-scale').value) || 2;
+  const totalFrames = Math.ceil(tlDuration * fps);
+  const gifEl = $('#gif-progress');
+  gifEl.style.display = 'block';
+  gifCancelled = false;
+
+  const gifW = W * scale;
+  const gifH = H * scale;
+
+  const gif = new GIF({
+    workers: 2,
+    quality: 10,
+    width: gifW,
+    height: gifH,
+    workerScript: 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js',
+  });
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = gifW;
+  offscreen.height = gifH;
+  const oCtx = offscreen.getContext('2d');
+
+  const savedState = { ...S };
+
+  let currentFrame = 0;
+
+  function captureNextFrame() {
+    if (gifCancelled) {
+      cleanupGif();
+      return;
+    }
+
+    const frameTime = (currentFrame / totalFrames) * tlDuration;
+    applyTimeline(frameTime);
+    generateLines();
+
+    oCtx.save();
+    oCtx.setTransform(scale, 0, 0, scale, 0, 0);
+    oCtx.fillStyle = S.bgColor;
+    oCtx.fillRect(0, 0, W, H);
+    oCtx.fillStyle = S.lineColor;
+    for (const line of lines) drawLine(oCtx, line.points);
+    oCtx.restore();
+
+    gif.addFrame(oCtx, { copy: true, delay: Math.round(1000 / fps) });
+
+    currentFrame++;
+    const capturePct = currentFrame / totalFrames;
+    $('#gif-label').textContent = `Capturing frame ${currentFrame}/${totalFrames}...`;
+    $('#gif-bar-fill').style.width = (capturePct * 50) + '%';
+
+    if (currentFrame < totalFrames) {
+      requestAnimationFrame(captureNextFrame);
+    } else {
+      $('#gif-label').textContent = 'Encoding GIF...';
+
+      gif.on('progress', p => {
+        if (gifCancelled) { gif.abort(); cleanupGif(); return; }
+        $('#gif-bar-fill').style.width = (50 + p * 50) + '%';
+      });
+
+      gif.on('finished', blob => {
+        cleanupGif();
+        downloadBlob(blob, 'line-reveal.gif');
+      });
+
+      gif.render();
+    }
+  }
+
+  function cleanupGif() {
+    Object.assign(S, savedState);
+    syncUIFromState();
+    generateLines();
+    $('#gif-progress').style.display = 'none';
+  }
+
+  captureNextFrame();
+}
+
+/** Render all animation frames to an offscreen canvas, return as array of PNG blobs */
+async function renderFrames(progressPrefix) {
+  const fps = parseInt($('#sel-gif-fps').value) || 30;
+  const scale = parseInt($('#sel-export-scale').value) || 2;
+  const totalFrames = Math.ceil(tlDuration * fps);
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = W * scale;
+  offscreen.height = H * scale;
+  const oCtx = offscreen.getContext('2d');
+
+  const savedState = { ...S };
+  const pngBlobs = [];
+
+  for (let f = 0; f < totalFrames; f++) {
+    if (gifCancelled) break;
+
+    const frameTime = (f / totalFrames) * tlDuration;
+    applyTimeline(frameTime);
+    generateLines();
+
+    oCtx.save();
+    oCtx.setTransform(scale, 0, 0, scale, 0, 0);
+    oCtx.fillStyle = S.bgColor;
+    oCtx.fillRect(0, 0, W, H);
+    oCtx.fillStyle = S.lineColor;
+    for (const line of lines) drawLine(oCtx, line.points);
+    oCtx.restore();
+
+    // Also show on main canvas
+    render();
+
+    const blob = await new Promise(resolve => offscreen.toBlob(resolve, 'image/png'));
+    pngBlobs.push(blob);
+
+    const pct = ((f + 1) / totalFrames) * 100;
+    $('#gif-label').textContent = `${progressPrefix} ${f + 1}/${totalFrames}...`;
+    $('#gif-bar-fill').style.width = (pct * 0.5) + '%'; // first 50% = rendering
+
+    // Yield to the browser so UI updates
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  // Restore state
+  Object.assign(S, savedState);
+  syncUIFromState();
+  generateLines();
+
+  return { pngBlobs, fps, scale, totalFrames };
+}
+
+/** Export high-quality video via WebCodecs — tries H.264→VP9→VP8, auto-picks best codec */
+async function exportMP4() {
+  if (!animStart || !animEnd) {
+    alert('Set START and END states first.');
+    return;
+  }
+
+  if (typeof VideoEncoder === 'undefined') {
+    console.warn('[Video] No WebCodecs support');
+    alert('WebCodecs not available in this browser.\nFalling back to MediaRecorder (lower quality).');
+    return exportWebM();
+  }
+
+  const fps = parseInt($('#sel-gif-fps').value) || 30;
+  const scale = parseInt($('#sel-export-scale').value) || 2;
+  const totalFrames = Math.ceil(tlDuration * fps);
+
+  // Even dimensions required by most codecs
+  const encW = Math.round((W * scale) / 2) * 2;
+  const encH = Math.round((H * scale) / 2) * 2;
+
+  console.log(`[Video] Canvas: ${W}x${H}, Export: ${encW}x${encH}, scale: ${scale}x, fps: ${fps}, frames: ${totalFrames}`);
+
+  const gifEl = $('#gif-progress');
+  gifEl.style.display = 'block';
+  gifCancelled = false;
+  $('#gif-label').textContent = 'Checking encoder support...';
+  $('#gif-bar-fill').style.width = '0%';
+
+  // Try codecs in order of preference
+  // Each entry: { codec, muxerType, extension, mimeType, label }
+  const candidates = [
+    // H.264 — multiple levels from high to low
+    { codec: 'avc1.640034', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 High L5.2' },
+    { codec: 'avc1.640033', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 High L5.1' },
+    { codec: 'avc1.640028', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 High L4.0' },
+    { codec: 'avc1.4d0028', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 Main L4.0' },
+    { codec: 'avc1.42e01e', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 Baseline L3.0' },
+    // VP9 — excellent for sharp graphics
+    { codec: 'vp09.00.10.08', muxer: 'webm', ext: '.webm', mime: 'video/webm', label: 'VP9' },
+    // VP8 — universal fallback
+    { codec: 'vp8', muxer: 'webm', ext: '.webm', mime: 'video/webm', label: 'VP8' },
+  ];
+
+  let chosen = null;
+  for (const c of candidates) {
+    try {
+      const cfg = { codec: c.codec, width: encW, height: encH, bitrate: 40_000_000, framerate: fps };
+      const result = await VideoEncoder.isConfigSupported(cfg);
+      if (result.supported) {
+        chosen = c;
+        console.log(`[Video] ✓ ${c.label} (${c.codec}) supported`);
+        break;
+      } else {
+        console.log(`[Video] ✗ ${c.label} (${c.codec}) not supported`);
+      }
+    } catch (e) {
+      console.log(`[Video] ✗ ${c.label} (${c.codec}) error:`, e.message);
+    }
+  }
+
+  if (!chosen) {
+    gifEl.style.display = 'none';
+    console.warn('[Video] No supported codec found, falling back to MediaRecorder');
+    alert('No video encoder available. Falling back to MediaRecorder (lower quality).');
+    return exportWebM();
+  }
+
+  // Check we have the right muxer library
+  if (chosen.muxer === 'mp4' && typeof Mp4Muxer === 'undefined') {
+    console.warn('[Video] Mp4Muxer not loaded, skipping H.264');
+    // Try webm codecs instead
+    chosen = null;
+    for (const c of candidates.filter(x => x.muxer === 'webm')) {
+      try {
+        const cfg = { codec: c.codec, width: encW, height: encH, bitrate: 40_000_000, framerate: fps };
+        const result = await VideoEncoder.isConfigSupported(cfg);
+        if (result.supported) { chosen = c; break; }
+      } catch (e) {}
+    }
+  }
+  if (chosen && chosen.muxer === 'webm' && typeof WebMMuxer === 'undefined') {
+    console.warn('[Video] WebMMuxer not loaded');
+    chosen = null;
+  }
+
+  if (!chosen) {
+    gifEl.style.display = 'none';
+    alert('Muxer libraries failed to load. Use PNG Sequence export instead.');
+    return;
+  }
+
+  console.log(`[Video] Using: ${chosen.label} → ${chosen.ext}`);
+  $('#gif-label').textContent = `Video: ${chosen.label} — preparing...`;
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = encW;
+  offscreen.height = encH;
+  const oCtx = offscreen.getContext('2d');
+
+  const savedState = { ...S };
+
+  try {
+    // Create the appropriate muxer
+    let target, muxer;
+    if (chosen.muxer === 'mp4') {
+      target = new Mp4Muxer.ArrayBufferTarget();
+      muxer = new Mp4Muxer.Muxer({
+        target,
+        video: { codec: 'avc', width: encW, height: encH },
+        fastStart: 'in-memory',
+      });
+    } else {
+      target = new WebMMuxer.ArrayBufferTarget();
+      muxer = new WebMMuxer.Muxer({
+        target,
+        video: {
+          codec: chosen.codec === 'vp8' ? 'V_VP8' : 'V_VP9',
+          width: encW,
+          height: encH,
+        },
+      });
+    }
+
+    // Init VideoEncoder
+    let encoderError = null;
+    const videoEncoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => { encoderError = e; console.error('[Video] Encoder error:', e); },
+    });
+
+    videoEncoder.configure({
+      codec: chosen.codec,
+      width: encW,
+      height: encH,
+      bitrate: 60_000_000,       // 60 Mbps — high quality for sharp line art
+      framerate: fps,
+      latencyMode: 'quality',
+    });
+
+    console.log('[Video] Encoder configured, rendering frames...');
+
+    // Render and encode each frame
+    for (let f = 0; f < totalFrames; f++) {
+      if (gifCancelled || encoderError) break;
+
+      const frameTime = (f / totalFrames) * tlDuration;
+      applyTimeline(frameTime);
+      generateLines();
+
+      // Draw to offscreen canvas at export resolution
+      oCtx.save();
+      oCtx.setTransform(encW / W, 0, 0, encH / H, 0, 0);
+      oCtx.fillStyle = S.bgColor;
+      oCtx.fillRect(0, 0, W, H);
+      oCtx.fillStyle = S.lineColor;
+      for (const line of lines) drawLine(oCtx, line.points);
+      oCtx.restore();
+
+      // Preview on main canvas
+      render();
+
+      // Create VideoFrame from canvas — same pixels as PNG export
+      const frame = new VideoFrame(offscreen, {
+        timestamp: Math.round((f / fps) * 1_000_000),
+        duration: Math.round((1 / fps) * 1_000_000),
+      });
+
+      // All keyframes = best quality for line art (no inter-frame smearing)
+      videoEncoder.encode(frame, { keyFrame: true });
+      frame.close();
+
+      // Backpressure
+      while (videoEncoder.encodeQueueSize > 5) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+
+      const pct = ((f + 1) / totalFrames) * 100;
+      $('#gif-label').textContent = `${chosen.label}: frame ${f + 1}/${totalFrames}`;
+      $('#gif-bar-fill').style.width = pct + '%';
+
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    if (encoderError) throw encoderError;
+    if (gifCancelled) {
+      videoEncoder.close();
+      Object.assign(S, savedState);
+      syncUIFromState();
+      generateLines();
+      gifEl.style.display = 'none';
+      return;
+    }
+
+    // Finalize
+    $('#gif-label').textContent = `${chosen.label}: finalizing...`;
+    await videoEncoder.flush();
+    videoEncoder.close();
+    muxer.finalize();
+
+    const videoBlob = new Blob([target.buffer], { type: chosen.mime });
+    const sizeMB = (videoBlob.size / 1024 / 1024).toFixed(1);
+    console.log(`[Video] Done! ${chosen.label}, ${sizeMB} MB, ${encW}x${encH}`);
+    downloadBlob(videoBlob, 'line-reveal' + chosen.ext);
+
+    Object.assign(S, savedState);
+    syncUIFromState();
+    generateLines();
+    gifEl.style.display = 'none';
+
+  } catch (err) {
+    console.error('[Video] Export failed:', err);
+    Object.assign(S, savedState);
+    syncUIFromState();
+    generateLines();
+    gifEl.style.display = 'none';
+    alert('Video export failed: ' + err.message + '\n\nUse PNG Sequence export instead.');
+  }
+}
+
+/** Fallback: WebM video via MediaRecorder (for browsers without WebCodecs) */
+async function exportWebM() {
+  if (!animStart || !animEnd) {
+    alert('Set START and END states first.');
+    return;
+  }
+
+  const fps = parseInt($('#sel-gif-fps').value) || 30;
+  const scale = parseInt($('#sel-export-scale').value) || 2;
+  const totalFrames = Math.ceil(tlDuration * fps);
+  const frameInterval = 1000 / fps;
+
+  const gifEl = $('#gif-progress');
+  gifEl.style.display = 'block';
+  gifCancelled = false;
+  $('#gif-label').textContent = 'Preparing WebM video...';
+  $('#gif-bar-fill').style.width = '0%';
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = W * scale;
+  offscreen.height = H * scale;
+  const oCtx = offscreen.getContext('2d');
+
+  const stream = offscreen.captureStream(fps);
+
+  const mimeType = MediaRecorder.isTypeSupported('video/webm; codecs=vp9')
+    ? 'video/webm; codecs=vp9' : 'video/webm';
+
+  const recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 40_000_000,
+  });
+
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+
+  const savedState = { ...S };
+
+  return new Promise((resolve) => {
+    recorder.onstop = () => {
+      Object.assign(S, savedState);
+      syncUIFromState();
+      generateLines();
+
+      const blob = new Blob(chunks, { type: mimeType });
+      downloadBlob(blob, 'line-reveal.webm');
+      gifEl.style.display = 'none';
+      resolve();
+    };
+
+    recorder.start();
+    let currentFrame = 0;
+
+    function renderNextFrame() {
+      if (gifCancelled) { recorder.stop(); return; }
+      if (currentFrame >= totalFrames) {
+        setTimeout(() => recorder.stop(), frameInterval * 2);
+        return;
+      }
+
+      const frameTime = (currentFrame / totalFrames) * tlDuration;
+      applyTimeline(frameTime);
+      generateLines();
+
+      oCtx.save();
+      oCtx.setTransform(scale, 0, 0, scale, 0, 0);
+      oCtx.fillStyle = S.bgColor;
+      oCtx.fillRect(0, 0, W, H);
+      oCtx.fillStyle = S.lineColor;
+      for (const line of lines) drawLine(oCtx, line.points);
+      oCtx.restore();
+
+      render();
+
+      currentFrame++;
+      const pct = (currentFrame / totalFrames) * 100;
+      $('#gif-label').textContent = `Recording frame ${currentFrame}/${totalFrames}...`;
+      $('#gif-bar-fill').style.width = pct + '%';
+
+      setTimeout(renderNextFrame, frameInterval);
+    }
+
+    renderNextFrame();
+  });
+}
+
+/** Export PNG sequence as zip */
+async function exportPNGSequence() {
+  if (typeof JSZip === 'undefined') { alert('JSZip not loaded.'); return; }
+  if (!animStart || !animEnd) { alert('Set START and END states first.'); return; }
+
+  const gifEl = $('#gif-progress');
+  gifEl.style.display = 'block';
+  gifCancelled = false;
+
+  const { pngBlobs } = await renderFrames('Rendering frame');
+  if (gifCancelled || pngBlobs.length === 0) { gifEl.style.display = 'none'; return; }
+
+  $('#gif-label').textContent = 'Zipping frames...';
+  $('#gif-bar-fill').style.width = '60%';
+
+  const zip = new JSZip();
+  const folder = zip.folder('frames');
+  for (let i = 0; i < pngBlobs.length; i++) {
+    folder.file(`frame_${String(i).padStart(4, '0')}.png`, pngBlobs[i]);
+  }
+
+  $('#gif-label').textContent = 'Compressing zip...';
+  $('#gif-bar-fill').style.width = '80%';
+
+  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  downloadBlob(zipBlob, 'line-reveal-frames.zip');
+  gifEl.style.display = 'none';
+}
+
+/** Export config JSON */
+function exportJSON() {
+  const data = {
+    version: 3,
+    state: { ...S },
+    animStart: animStart ? { ...animStart } : null,
+    animEnd: animEnd ? { ...animEnd } : null,
+    tlDuration,
+  };
+  downloadBlob(
+    new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
+    'line-reveal-config.json'
+  );
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SHARE — URL-based state serialization
+// ═══════════════════════════════════════════════════════════════
+
+function shareURL() {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(S)) {
+    if (v !== '' && v !== null && v !== undefined) {
+      params.set(k, String(v));
+    }
+  }
+  const url = location.origin + location.pathname + '?' + params.toString();
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = $('#btn-share');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+    setTimeout(() => { btn.innerHTML = orig; }, 2000);
+  });
+}
+
+function loadFromURL() {
+  const params = new URLSearchParams(location.search);
+  for (const [k, v] of params) {
+    if (k in S) {
+      if (typeof S[k] === 'number') S[k] = parseFloat(v);
+      else if (typeof S[k] === 'boolean') S[k] = v === 'true';
+      else S[k] = v;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UI BINDING — connect DOM to state
+// ═══════════════════════════════════════════════════════════════
+
+/** Push state values to UI controls */
+function syncUIFromState() {
+  setRangeVal('rng-reveal', S.reveal, 'val-reveal', v => v.toFixed(2));
+  setRangeVal('rng-scroll-offset', S.scrollOffset, 'val-scroll-offset', v => Math.round(v));
+  setRangeVal('rng-wmin', S.weightMin, 'val-wmin', v => v.toFixed(1));
+  setRangeVal('rng-blur', S.blur, 'val-blur', v => Math.round(v));
+  setRangeVal('rng-contrast', S.contrast, 'val-contrast', v => v.toFixed(2));
+  setRangeVal('rng-count', S.lineCount, 'val-count', v => Math.round(v));
+  // Update auto max weight display
+  if (document.getElementById('val-wmax-auto')) {
+    const spacing = (S.lineDir === 'horizontal' ? H : W) / S.lineCount;
+    const autoMax = Math.max(0, spacing - S.gap);
+    document.getElementById('val-wmax-auto').textContent = autoMax.toFixed(1) + ' (auto)';
+  }
+}
+
+function setRangeVal(rngId, value, valId, fmt) {
+  const rng = document.getElementById(rngId);
+  const val = document.getElementById(valId);
+  if (rng) rng.value = value;
+  if (val) val.textContent = fmt ? fmt(value) : value;
+}
+
+/** Bind a range slider to a state key */
+function bindRange(rngId, stateKey, valId, fmt, onChange) {
+  const rng = document.getElementById(rngId);
+  const val = document.getElementById(valId);
+  if (!rng) return;
+
+  const update = () => {
+    const v = parseFloat(rng.value);
+    S[stateKey] = v;
+    if (val && fmt) val.textContent = fmt(v);
+    if (onChange) onChange(v);
+  };
+
+  rng.addEventListener('input', update);
+
+  // Click-to-edit on value span
+  if (val) setupClickToEdit(val, rng, stateKey, fmt, onChange);
+}
+
+/** Make a value span click-to-edit */
+function setupClickToEdit(valSpan, rng, stateKey, fmt, onChange) {
+  valSpan.addEventListener('click', () => {
+    if (valSpan.querySelector('.ctrl-val-input')) return; // already editing
+    const currentVal = S[stateKey];
+    const origText = valSpan.textContent;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'ctrl-val-input';
+    input.value = currentVal;
+    valSpan.textContent = '';
+    valSpan.appendChild(input);
+    input.focus();
+    input.select();
+
+    const commit = () => {
+      const parsed = parseFloat(input.value);
+      if (isNaN(parsed)) {
+        cancel();
+        return;
+      }
+      const min = parseFloat(rng.min);
+      const max = parseFloat(rng.max);
+      const clamped = Math.max(min, Math.min(max, parsed));
+      rng.value = clamped;
+      S[stateKey] = clamped;
+      valSpan.textContent = fmt ? fmt(clamped) : clamped;
+      if (onChange) onChange(clamped);
+    };
+
+    const cancel = () => {
+      valSpan.textContent = origText;
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', commit);
+  });
+}
+
+/** Bind a switch row to a state key */
+function bindSwitch(containerId, stateKey, onChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll('.switch-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('.switch-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      S[stateKey] = btn.dataset.val;
+      if (onChange) onChange(btn.dataset.val);
+    });
+    // Set initial active state
+    if (btn.dataset.val === S[stateKey]) {
+      container.querySelectorAll('.switch-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    }
+  });
+}
+
+function bindToggle(toggleId, stateKey, onChange) {
+  const el = document.getElementById(toggleId);
+  if (!el) return;
+  if (S[stateKey]) el.classList.add('on');
+  el.addEventListener('click', () => {
+    S[stateKey] = !S[stateKey];
+    el.classList.toggle('on');
+    if (onChange) onChange(S[stateKey]);
+  });
+}
+
+function initUI() {
+  // ─── Canvas size ───
+  const selSize = $('#sel-canvas-size');
+  selSize.addEventListener('change', () => {
+    const v = selSize.value;
+    if (v === 'free') {
+      S.canvasWidth = 0;
+      S.canvasHeight = 0;
+      $('#custom-size').style.display = 'none';
+    } else if (v === 'custom') {
+      S.canvasWidth = parseInt($('#inp-cw').value) || 1920;
+      S.canvasHeight = parseInt($('#inp-ch').value) || 1080;
+      $('#custom-size').style.display = 'block';
+    } else {
+      const [w, h] = v.split('x').map(Number);
+      S.canvasWidth = w;
+      S.canvasHeight = h;
+      $('#custom-size').style.display = 'none';
+    }
+    resizeCanvas();
+  });
+
+  $('#inp-cw').addEventListener('change', () => {
+    S.canvasWidth = parseInt($('#inp-cw').value) || 1920;
+    resizeCanvas();
+  });
+  $('#inp-ch').addEventListener('change', () => {
+    S.canvasHeight = parseInt($('#inp-ch').value) || 1080;
+    resizeCanvas();
+  });
+
+  // ─── Source type ───
+  bindSwitch('sw-source', 'source', (v) => {
+    $('#src-image').style.display = v === 'image' ? 'block' : 'none';
+    $('#src-text').style.display = v === 'text' ? 'block' : 'none';
+    $('#src-svg').style.display = v === 'svg' ? 'block' : 'none';
+    scheduleUpdate();
+  });
+
+  // ─── Image upload ───
+  const imgInput = $('#inp-image');
+  imgInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      srcImage = new Image();
+      srcImage.onload = () => {
+        const preview = $('#img-preview');
+        preview.src = srcImage.src;
+        preview.style.display = 'block';
+        $('#zone-image').classList.add('has-file');
+        $('#btn-clear-img').style.display = 'inline-block';
+        scheduleUpdate();
+      };
+      srcImage.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  $('#btn-clear-img').addEventListener('click', () => {
+    srcImage = null;
+    $('#img-preview').style.display = 'none';
+    $('#zone-image').classList.remove('has-file');
+    $('#btn-clear-img').style.display = 'none';
+    imgInput.value = '';
+    scheduleUpdate();
+  });
+
+  // Drag-drop on image zone
+  const zoneImg = $('#zone-image');
+  zoneImg.addEventListener('dragover', e => { e.preventDefault(); zoneImg.style.borderColor = 'var(--accent)'; });
+  zoneImg.addEventListener('dragleave', () => { zoneImg.style.borderColor = ''; });
+  zoneImg.addEventListener('drop', e => {
+    e.preventDefault();
+    zoneImg.style.borderColor = '';
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      imgInput.files = dt.files;
+      imgInput.dispatchEvent(new Event('change'));
+    }
+  });
+
+  // ─── Text controls ───
+  const textArea = $('#inp-text');
+  textArea.addEventListener('input', () => {
+    S.textContent = textArea.value;
+    scheduleUpdate();
+  });
+
+  const selFont = $('#sel-font');
+  selFont.addEventListener('change', () => {
+    if (selFont.value === 'custom') {
+      $('#inp-font-file').click();
+    } else {
+      S.textFont = selFont.value;
+      scheduleUpdate();
+    }
+  });
+
+  // Custom font upload
+  $('#inp-font-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const font = opentype.parse(ev.target.result);
+        const fontName = font.names.fontFamily?.en || file.name.replace(/\.\w+$/, '');
+        // Create @font-face
+        const fontBlob = new Blob([ev.target.result]);
+        const fontUrl = URL.createObjectURL(fontBlob);
+        const style = document.createElement('style');
+        style.textContent = `@font-face { font-family: "${fontName}"; src: url("${fontUrl}"); }`;
+        document.head.appendChild(style);
+        // Add option and select
+        const opt = document.createElement('option');
+        opt.value = fontName;
+        opt.textContent = fontName + ' (custom)';
+        selFont.insertBefore(opt, selFont.querySelector('[value="custom"]'));
+        selFont.value = fontName;
+        S.textFont = fontName;
+        // Small delay for font to load
+        setTimeout(() => scheduleUpdate(), 200);
+      } catch (err) {
+        console.error('Font parse error:', err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  bindRange('rng-font-size', 'textFontSize', 'val-font-size', v => Math.round(v), () => scheduleUpdate());
+  bindSwitch('sw-weight', 'textFontWeight', () => scheduleUpdate());
+  bindSwitch('sw-align', 'textAlign', () => scheduleUpdate());
+
+  // Position grid
+  const posMap = {
+    tl: ['left', 'top'], tc: ['center', 'top'], tr: ['right', 'top'],
+    ml: ['left', 'center'], mc: ['center', 'center'], mr: ['right', 'center'],
+    bl: ['left', 'bottom'], bc: ['center', 'bottom'], br: ['right', 'bottom'],
+  };
+  $$('#pos-grid .pos-cell').forEach(cell => {
+    cell.addEventListener('click', () => {
+      $$('#pos-grid .pos-cell').forEach(c => c.classList.remove('active'));
+      cell.classList.add('active');
+      const [h, v] = posMap[cell.dataset.pos];
+      S.textAlign = h;
+      S.textVAlign = v;
+      // Update align switch
+      const alignBtns = $$('#sw-align .switch-btn');
+      alignBtns.forEach(b => b.classList.remove('active'));
+      alignBtns.forEach(b => { if (b.dataset.val === h) b.classList.add('active'); });
+      scheduleUpdate();
+    });
+  });
+
+  bindRange('rng-line-height', 'textLineHeight', 'val-line-height', v => v.toFixed(2), () => scheduleUpdate());
+  bindRange('rng-max-width', 'textMaxWidth', 'val-max-width', v => v.toFixed(2), () => scheduleUpdate());
+  bindRange('rng-letter-spacing', 'textLetterSpacing', 'val-letter-spacing', v => Math.round(v), () => scheduleUpdate());
+  bindRange('rng-y-offset', 'textYOffset', 'val-y-offset', v => Math.round(v), () => scheduleUpdate());
+
+  // ─── SVG upload ───
+  $('#inp-svg').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      srcSVG = ev.target.result;
+      $('#zone-svg').classList.add('has-file');
+      $('#btn-clear-svg').style.display = 'inline-block';
+      scheduleUpdate();
+    };
+    reader.readAsText(file);
+  });
+
+  $('#btn-clear-svg').addEventListener('click', () => {
+    srcSVG = null;
+    $('#zone-svg').classList.remove('has-file');
+    $('#btn-clear-svg').style.display = 'none';
+    $('#inp-svg').value = '';
+    scheduleUpdate();
+  });
+
+  // ─── Processing ───
+  bindRange('rng-blur', 'blur', 'val-blur', v => Math.round(v), () => scheduleUpdate());
+  bindRange('rng-contrast', 'contrast', 'val-contrast', v => v.toFixed(2), () => scheduleUpdate());
+  bindRange('rng-brightness', 'brightness', 'val-brightness', v => Math.round(v), () => scheduleUpdate());
+  bindToggle('tog-threshold', 'threshold', (on) => {
+    $('#row-threshold').style.display = on ? 'flex' : 'none';
+    scheduleUpdate();
+  });
+  bindRange('rng-threshold', 'thresholdValue', 'val-threshold', v => Math.round(v), () => scheduleUpdate());
+  bindToggle('tog-invert', 'invert', () => scheduleUpdate());
+
+  // ─── Lines ───
+  bindSwitch('sw-dir', 'lineDir', () => { calcMaxWeight(); generateLines(); });
+  bindRange('rng-count', 'lineCount', 'val-count', v => Math.round(v), () => { calcMaxWeight(); generateLines(); });
+  bindRange('rng-detail', 'lineDetail', 'val-detail', v => Math.round(v), () => { generateLines(); });
+  bindRange('rng-wmin', 'weightMin', 'val-wmin', v => v.toFixed(1), () => { generateLines(); });
+  bindRange('rng-gap', 'gap', 'val-gap', v => v.toFixed(1), () => { calcMaxWeight(); generateLines(); });
+
+  // ─── Animation ───
+  bindRange('rng-reveal', 'reveal', 'val-reveal', v => v.toFixed(2), () => { generateLines(); });
+  bindRange('rng-scroll-offset', 'scrollOffset', 'val-scroll-offset', v => Math.round(v), () => { generateLines(); });
+
+  $('#btn-set-start').addEventListener('click', setStart);
+  $('#btn-set-end').addEventListener('click', setEnd);
+
+  // ─── Color ───
+  $('#clr-line').addEventListener('input', (e) => { S.lineColor = e.target.value; });
+  $('#clr-bg').addEventListener('input', (e) => { S.bgColor = e.target.value; });
+
+  // ─── Presets ───
+  $$('.preset-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const preset = chip.dataset.preset;
+      if (PRESETS[preset]) PRESETS[preset]();
+    });
+  });
+
+  // ─── Topbar buttons ───
+  $('#btn-share').addEventListener('click', shareURL);
+
+  // Timeline toggle
+  $('#btn-timeline').addEventListener('click', () => {
+    app.classList.toggle('timeline-hidden');
+    $('#btn-timeline').classList.toggle('active');
+    resizeCanvas();
+  });
+
+  // Export dropdown
+  const exportBtn = $('#btn-export');
+  const exportMenu = $('#export-menu');
+  exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportMenu.classList.toggle('open');
+  });
+  document.addEventListener('click', () => { exportMenu.classList.remove('open'); });
+
+  $$('#export-menu .dropdown-item').forEach(item => {
+    item.addEventListener('click', () => {
+      exportMenu.classList.remove('open');
+      const type = item.dataset.export;
+      if (type === 'svg') exportSVG();
+      else if (type === 'png') { const s = parseInt($('#sel-export-scale').value) || 2; exportPNG(s); }
+      else if (type === 'gif') exportGIF();
+      else if (type === 'mp4') exportMP4();
+      else if (type === 'pngseq') exportPNGSequence();
+      else if (type === 'json') exportJSON();
+    });
+  });
+
+  // GIF/MP4 cancel button
+  $('#gif-cancel').addEventListener('click', () => { gifCancelled = true; });
+
+  // ─── Timeline controls ───
+  $('#tl-play').addEventListener('click', () => {
+    tlPlaying = !tlPlaying;
+    $('#tl-play').innerHTML = tlPlaying ? '&#10074;&#10074;' : '&#9654;';
+    if (tlPlaying && tlTime >= tlDuration) tlTime = 0;
+  });
+
+  $('#tl-stop').addEventListener('click', () => {
+    tlPlaying = false;
+    tlTime = 0;
+    $('#tl-play').innerHTML = '&#9654;';
+    updateTimelineUI();
+    generateLines();
+  });
+
+  $('#tl-loop').addEventListener('click', () => {
+    tlLoop = !tlLoop;
+    $('#tl-loop').classList.toggle('active', tlLoop);
+  });
+
+  $('#tl-duration').addEventListener('change', () => {
+    tlDuration = parseFloat($('#tl-duration').value) || 3.0;
+    tlDuration = Math.max(0.5, Math.min(30, tlDuration));
+    $('#tl-duration').value = tlDuration;
+    updateTimelineUI();
+  });
+
+  // Scrub bar interaction
+  const scrubEl = $('#tl-scrub');
+  let scrubbing = false;
+  const scrubHandler = (e) => {
+    const rect = scrubEl.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    tlTime = pct * tlDuration;
+    if (animStart && animEnd) applyTimeline(tlTime);
+    updateTimelineUI();
+    generateLines();
+  };
+  scrubEl.addEventListener('mousedown', (e) => {
+    scrubbing = true;
+    scrubHandler(e);
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (scrubbing) scrubHandler(e);
+  });
+  document.addEventListener('mouseup', () => { scrubbing = false; });
+
+  // Resize observer
+  new ResizeObserver(() => resizeCanvas()).observe(canvasWrap);
+}
+
+// ─── Debounced source update ───
+let updateTimer = null;
+function scheduleUpdate() {
+  clearTimeout(updateTimer);
+  updateTimer = setTimeout(() => {
+    updateSource();
+    generateLines();
+  }, 50);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INITIALIZATION
+// ═══════════════════════════════════════════════════════════════
+
+function init() {
+  // Initialize Paper.js (needed for SVG export path simplification)
+  paper.setup(document.createElement('canvas'));
+
+  // Load state from URL if present
+  loadFromURL();
+
+  // Initialize UI
+  initUI();
+
+  // Initial sizing and source rendering
+  resizeCanvas();
+
+  // Set initial UI values
+  syncUIFromState();
+  updateTimelineUI();
+
+  // Start animation loop
+  lastFrame = 0;
+  requestAnimationFrame(frame);
+}
+
+// Wait for fonts to load before starting
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(init);
+} else {
+  window.addEventListener('load', init);
+}
+</script>
+</body>
+</html>
