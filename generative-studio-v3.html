@@ -999,6 +999,7 @@ let W = 0, H = 0;          // current canvas dimensions
 // Source data
 let srcImage = null;        // loaded Image element
 let srcSVG = null;          // loaded SVG string
+let srcSVGImg = null;       // pre-loaded Image element for SVG (avoids re-decoding)
 let customFont = null;      // uploaded font (opentype.js font object)
 
 // Timeline state
@@ -1042,10 +1043,8 @@ function updateSource() {
     renderText();
   } else if (S.source === 'image' && srcImage) {
     renderImage();
-  } else if (S.source === 'svg' && srcSVG) {
+  } else if (S.source === 'svg' && srcSVGImg) {
     renderSVGSource();
-    // SVG loads async — processing happens in its onload callback
-    return;
   }
 
   // Apply processing (sync sources only — SVG returns above)
@@ -1110,28 +1109,19 @@ function renderImage() {
   srcCtx.drawImage(srcImage, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
 }
 
-/** Render SVG string to srcCanvas */
+/** Render SVG to srcCanvas (synchronous — image already loaded) */
 function renderSVGSource() {
-  if (!srcSVG) return;
-  const img = new Image();
-  const blob = new Blob([srcSVG], { type: 'image/svg+xml' });
-  const url = URL.createObjectURL(blob);
-  img.onload = () => {
-    // Fill white background so transparent SVGs render properly
-    srcCtx.fillStyle = '#fff';
-    srcCtx.fillRect(0, 0, bW, bH);
-    const iw = img.naturalWidth || bW;
-    const ih = img.naturalHeight || bH;
-    const scale = Math.min(bW / iw, bH / ih);
-    const dw = iw * scale;
-    const dh = ih * scale;
-    srcCtx.drawImage(img, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
-    URL.revokeObjectURL(url);
-    applyProcessing();
-    extractBrightness();
-    generateLines();
-  };
-  img.src = url;
+  if (!srcSVGImg) return;
+  // White background so dark SVG content is visible (most SVGs have dark fills/strokes)
+  srcCtx.fillStyle = '#fff';
+  srcCtx.fillRect(0, 0, bW, bH);
+  const iw = srcSVGImg.naturalWidth || bW;
+  const ih = srcSVGImg.naturalHeight || bH;
+  const scale = Math.min(bW / iw, bH / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  srcCtx.drawImage(srcSVGImg, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
+  console.log('[SVG Render] drawn:', Math.round(dw), 'x', Math.round(dh), 'natural:', iw, 'x', ih);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1859,7 +1849,7 @@ async function renderFrames(progressPrefix) {
   return { pngBlobs, fps, scale, totalFrames };
 }
 
-/** Export high-quality video via WebCodecs — tries H.264→VP9→VP8, auto-picks best codec */
+/** Export video — renders PNG frames first (proven quality), then encodes to video via WebCodecs */
 async function exportMP4() {
   if (!animStart || !animEnd) {
     alert('Set START and END states first.');
@@ -1867,123 +1857,85 @@ async function exportMP4() {
   }
 
   if (typeof VideoEncoder === 'undefined') {
-    console.warn('[Video] No WebCodecs support');
-    alert('WebCodecs not available in this browser.\nFalling back to MediaRecorder (lower quality).');
-    return exportWebM();
+    alert('WebCodecs not available in this browser. Use PNG Sequence export instead.');
+    return;
   }
 
   const fps = parseInt($('#sel-gif-fps').value) || 30;
   const scale = parseInt($('#sel-export-scale').value) || 2;
-  const totalFrames = Math.ceil(tlDuration * fps);
 
-  // Even dimensions required by most codecs
+  // Even dimensions required by video codecs
   const encW = Math.round((W * scale) / 2) * 2;
   const encH = Math.round((H * scale) / 2) * 2;
-
-  console.log(`[Video] Canvas: ${W}x${H}, Export: ${encW}x${encH}, scale: ${scale}x, fps: ${fps}, frames: ${totalFrames}`);
 
   const gifEl = $('#gif-progress');
   gifEl.style.display = 'block';
   gifCancelled = false;
+
+  // ── Step 1: Find a working codec ──
   $('#gif-label').textContent = 'Checking encoder support...';
   $('#gif-bar-fill').style.width = '0%';
 
-  // Try codecs in order of preference
-  // Each entry: { codec, muxerType, extension, mimeType, label }
   const candidates = [
-    // H.264 — multiple levels from high to low
-    { codec: 'avc1.640034', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 High L5.2' },
-    { codec: 'avc1.640033', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 High L5.1' },
-    { codec: 'avc1.640028', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 High L4.0' },
-    { codec: 'avc1.4d0028', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 Main L4.0' },
-    { codec: 'avc1.42e01e', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 Baseline L3.0' },
-    // VP9 — excellent for sharp graphics
-    { codec: 'vp09.00.10.08', muxer: 'webm', ext: '.webm', mime: 'video/webm', label: 'VP9' },
-    // VP8 — universal fallback
-    { codec: 'vp8', muxer: 'webm', ext: '.webm', mime: 'video/webm', label: 'VP8' },
+    { codec: 'avc1.640034', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 L5.2', muxCodec: 'avc' },
+    { codec: 'avc1.640033', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 L5.1', muxCodec: 'avc' },
+    { codec: 'avc1.640028', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 L4.0', muxCodec: 'avc' },
+    { codec: 'avc1.4d0028', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 Main', muxCodec: 'avc' },
+    { codec: 'avc1.42e01e', muxer: 'mp4', ext: '.mp4', mime: 'video/mp4', label: 'H.264 Base', muxCodec: 'avc' },
+    { codec: 'vp09.00.10.08', muxer: 'webm', ext: '.webm', mime: 'video/webm', label: 'VP9', muxCodec: 'V_VP9' },
+    { codec: 'vp8', muxer: 'webm', ext: '.webm', mime: 'video/webm', label: 'VP8', muxCodec: 'V_VP8' },
   ];
 
   let chosen = null;
   for (const c of candidates) {
+    // Check muxer library is available
+    if (c.muxer === 'mp4' && typeof Mp4Muxer === 'undefined') continue;
+    if (c.muxer === 'webm' && typeof WebMMuxer === 'undefined') continue;
     try {
-      const cfg = { codec: c.codec, width: encW, height: encH, bitrate: 40_000_000, framerate: fps };
-      const result = await VideoEncoder.isConfigSupported(cfg);
-      if (result.supported) {
-        chosen = c;
-        console.log(`[Video] ✓ ${c.label} (${c.codec}) supported`);
-        break;
-      } else {
-        console.log(`[Video] ✗ ${c.label} (${c.codec}) not supported`);
-      }
-    } catch (e) {
-      console.log(`[Video] ✗ ${c.label} (${c.codec}) error:`, e.message);
-    }
+      const result = await VideoEncoder.isConfigSupported({
+        codec: c.codec, width: encW, height: encH, bitrate: 40_000_000, framerate: fps,
+      });
+      if (result.supported) { chosen = c; break; }
+    } catch (e) { /* try next */ }
   }
 
   if (!chosen) {
     gifEl.style.display = 'none';
-    console.warn('[Video] No supported codec found, falling back to MediaRecorder');
-    alert('No video encoder available. Falling back to MediaRecorder (lower quality).');
-    return exportWebM();
-  }
-
-  // Check we have the right muxer library
-  if (chosen.muxer === 'mp4' && typeof Mp4Muxer === 'undefined') {
-    console.warn('[Video] Mp4Muxer not loaded, skipping H.264');
-    // Try webm codecs instead
-    chosen = null;
-    for (const c of candidates.filter(x => x.muxer === 'webm')) {
-      try {
-        const cfg = { codec: c.codec, width: encW, height: encH, bitrate: 40_000_000, framerate: fps };
-        const result = await VideoEncoder.isConfigSupported(cfg);
-        if (result.supported) { chosen = c; break; }
-      } catch (e) {}
-    }
-  }
-  if (chosen && chosen.muxer === 'webm' && typeof WebMMuxer === 'undefined') {
-    console.warn('[Video] WebMMuxer not loaded');
-    chosen = null;
-  }
-
-  if (!chosen) {
-    gifEl.style.display = 'none';
-    alert('Muxer libraries failed to load. Use PNG Sequence export instead.');
+    alert('No video encoder found.\nUse PNG Sequence export instead.');
     return;
   }
 
-  console.log(`[Video] Using: ${chosen.label} → ${chosen.ext}`);
-  $('#gif-label').textContent = `Video: ${chosen.label} — preparing...`;
+  console.log(`[Video] Using ${chosen.label} (${chosen.codec}), ${encW}x${encH} @ ${fps}fps`);
 
-  const offscreen = document.createElement('canvas');
-  offscreen.width = encW;
-  offscreen.height = encH;
-  const oCtx = offscreen.getContext('2d');
+  // ── Step 2: Render all frames as PNGs (same proven pipeline as PNG Sequence export) ──
+  $('#gif-label').textContent = `Rendering frames (${chosen.label})...`;
+  const { pngBlobs } = await renderFrames('Rendering frame');
 
-  const savedState = { ...S };
+  if (gifCancelled || pngBlobs.length === 0) {
+    gifEl.style.display = 'none';
+    return;
+  }
 
+  // ── Step 3: Decode PNGs → VideoFrames → encode to video ──
   try {
-    // Create the appropriate muxer
+    // Create muxer
     let target, muxer;
     if (chosen.muxer === 'mp4') {
       target = new Mp4Muxer.ArrayBufferTarget();
       muxer = new Mp4Muxer.Muxer({
         target,
-        video: { codec: 'avc', width: encW, height: encH },
+        video: { codec: chosen.muxCodec, width: encW, height: encH },
         fastStart: 'in-memory',
       });
     } else {
       target = new WebMMuxer.ArrayBufferTarget();
       muxer = new WebMMuxer.Muxer({
         target,
-        video: {
-          codec: chosen.codec === 'vp8' ? 'V_VP8' : 'V_VP9',
-          width: encW,
-          height: encH,
-        },
+        video: { codec: chosen.muxCodec, width: encW, height: encH },
       });
     }
 
-    // Init VideoEncoder
+    // Create encoder
     let encoderError = null;
     const videoEncoder = new VideoEncoder({
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
@@ -1994,40 +1946,36 @@ async function exportMP4() {
       codec: chosen.codec,
       width: encW,
       height: encH,
-      bitrate: 60_000_000,       // 60 Mbps — high quality for sharp line art
+      bitrate: 60_000_000,
       framerate: fps,
       latencyMode: 'quality',
     });
 
-    console.log('[Video] Encoder configured, rendering frames...');
+    // Temp canvas for drawing PNG bitmaps at exact codec dimensions
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = encW;
+    tmpCanvas.height = encH;
+    const tmpCtx = tmpCanvas.getContext('2d');
 
-    // Render and encode each frame
-    for (let f = 0; f < totalFrames; f++) {
+    $('#gif-label').textContent = `Encoding ${chosen.label}...`;
+
+    for (let i = 0; i < pngBlobs.length; i++) {
       if (gifCancelled || encoderError) break;
 
-      const frameTime = (f / totalFrames) * tlDuration;
-      applyTimeline(frameTime);
-      generateLines();
+      // Decode PNG blob → ImageBitmap (lossless)
+      const bitmap = await createImageBitmap(pngBlobs[i]);
 
-      // Draw to offscreen canvas at export resolution
-      oCtx.save();
-      oCtx.setTransform(encW / W, 0, 0, encH / H, 0, 0);
-      oCtx.fillStyle = S.bgColor;
-      oCtx.fillRect(0, 0, W, H);
-      oCtx.fillStyle = S.lineColor;
-      for (const line of lines) drawLine(oCtx, line.points);
-      oCtx.restore();
+      // Draw bitmap onto even-dimensioned canvas
+      tmpCtx.clearRect(0, 0, encW, encH);
+      tmpCtx.drawImage(bitmap, 0, 0, encW, encH);
+      bitmap.close();
 
-      // Preview on main canvas
-      render();
-
-      // Create VideoFrame from canvas — same pixels as PNG export
-      const frame = new VideoFrame(offscreen, {
-        timestamp: Math.round((f / fps) * 1_000_000),
+      // Create VideoFrame from canvas
+      const frame = new VideoFrame(tmpCanvas, {
+        timestamp: Math.round((i / fps) * 1_000_000),
         duration: Math.round((1 / fps) * 1_000_000),
       });
 
-      // All keyframes = best quality for line art (no inter-frame smearing)
       videoEncoder.encode(frame, { keyFrame: true });
       frame.close();
 
@@ -2036,8 +1984,8 @@ async function exportMP4() {
         await new Promise(r => setTimeout(r, 10));
       }
 
-      const pct = ((f + 1) / totalFrames) * 100;
-      $('#gif-label').textContent = `${chosen.label}: frame ${f + 1}/${totalFrames}`;
+      const pct = 50 + ((i + 1) / pngBlobs.length) * 50;
+      $('#gif-label').textContent = `${chosen.label}: encoding ${i + 1}/${pngBlobs.length}`;
       $('#gif-bar-fill').style.width = pct + '%';
 
       await new Promise(r => setTimeout(r, 0));
@@ -2046,14 +1994,10 @@ async function exportMP4() {
     if (encoderError) throw encoderError;
     if (gifCancelled) {
       videoEncoder.close();
-      Object.assign(S, savedState);
-      syncUIFromState();
-      generateLines();
       gifEl.style.display = 'none';
       return;
     }
 
-    // Finalize
     $('#gif-label').textContent = `${chosen.label}: finalizing...`;
     await videoEncoder.flush();
     videoEncoder.close();
@@ -2061,21 +2005,14 @@ async function exportMP4() {
 
     const videoBlob = new Blob([target.buffer], { type: chosen.mime });
     const sizeMB = (videoBlob.size / 1024 / 1024).toFixed(1);
-    console.log(`[Video] Done! ${chosen.label}, ${sizeMB} MB, ${encW}x${encH}`);
+    console.log(`[Video] Done! ${chosen.label}, ${sizeMB} MB, ${encW}x${encH}, ${pngBlobs.length} frames`);
     downloadBlob(videoBlob, 'line-reveal' + chosen.ext);
-
-    Object.assign(S, savedState);
-    syncUIFromState();
-    generateLines();
     gifEl.style.display = 'none';
 
   } catch (err) {
-    console.error('[Video] Export failed:', err);
-    Object.assign(S, savedState);
-    syncUIFromState();
-    generateLines();
+    console.error('[Video] Encoding failed:', err);
     gifEl.style.display = 'none';
-    alert('Video export failed: ' + err.message + '\n\nUse PNG Sequence export instead.');
+    alert('Video encoding failed: ' + err.message + '\n\nYour frames were rendered successfully.\nUse PNG Sequence export and convert with FFmpeg:\nffmpeg -framerate ' + fps + ' -i frame_%04d.png -c:v libx264 -crf 18 -pix_fmt yuv420p output.mp4');
   }
 }
 
@@ -2537,18 +2474,35 @@ function initUI() {
   $('#inp-svg').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    // Read SVG text (for potential SVG export features)
     const reader = new FileReader();
     reader.onload = (ev) => {
       srcSVG = ev.target.result;
-      $('#zone-svg').classList.add('has-file');
-      $('#btn-clear-svg').style.display = 'inline-block';
-      scheduleUpdate();
     };
     reader.readAsText(file);
+
+    // Load Image directly from File blob URL (most reliable method)
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      srcSVGImg = img;
+      $('#zone-svg').classList.add('has-file');
+      $('#btn-clear-svg').style.display = 'inline-block';
+      console.log('[SVG] Loaded:', img.naturalWidth, 'x', img.naturalHeight);
+      scheduleUpdate();
+    };
+    img.onerror = (err) => {
+      console.error('[SVG] Failed to load as image:', err);
+      URL.revokeObjectURL(url);
+      alert('Could not load SVG. Make sure it is a valid SVG file.');
+    };
+    img.src = url;
   });
 
   $('#btn-clear-svg').addEventListener('click', () => {
     srcSVG = null;
+    srcSVGImg = null;
     $('#zone-svg').classList.remove('has-file');
     $('#btn-clear-svg').style.display = 'none';
     $('#inp-svg').value = '';
