@@ -755,6 +755,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
       <!-- SVG source -->
       <div id="src-svg" style="display:none">
         <div class="upload-zone" id="zone-svg">
+          <img id="svg-preview" style="display:none; max-width:100%; max-height:80px; margin-bottom:4px; border-radius:4px; background:#fff;">
           Drop SVG or click to upload
           <input type="file" accept=".svg" id="inp-svg">
         </div>
@@ -1109,19 +1110,47 @@ function renderImage() {
   srcCtx.drawImage(srcImage, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
 }
 
-/** Render SVG to srcCanvas (synchronous — image already loaded) */
+/** Render SVG to srcCanvas (synchronous — image already loaded).
+ *  Auto-detects whether to use white or black background based on which
+ *  produces more brightness contrast (handles both dark and light SVGs). */
 function renderSVGSource() {
   if (!srcSVGImg) return;
-  // White background so dark SVG content is visible (most SVGs have dark fills/strokes)
-  srcCtx.fillStyle = '#fff';
-  srcCtx.fillRect(0, 0, bW, bH);
   const iw = srcSVGImg.naturalWidth || bW;
   const ih = srcSVGImg.naturalHeight || bH;
   const scale = Math.min(bW / iw, bH / ih);
   const dw = iw * scale;
   const dh = ih * scale;
-  srcCtx.drawImage(srcSVGImg, (bW - dw) / 2, (bH - dh) / 2, dw, dh);
-  console.log('[SVG Render] drawn:', Math.round(dw), 'x', Math.round(dh), 'natural:', iw, 'x', ih);
+  const ox = (bW - dw) / 2, oy = (bH - dh) / 2;
+
+  // Helper: draw SVG on a given background color, return brightness variance
+  function tryBackground(bg) {
+    srcCtx.fillStyle = bg;
+    srcCtx.fillRect(0, 0, bW, bH);
+    srcCtx.drawImage(srcSVGImg, ox, oy, dw, dh);
+    // Sample a grid of pixels to measure variance
+    const data = srcCtx.getImageData(0, 0, bW, bH).data;
+    const step = Math.max(1, Math.floor(bW * bH / 2000)); // ~2000 samples
+    let sum = 0, sum2 = 0, n = 0;
+    for (let i = 0; i < bW * bH; i += step) {
+      const idx = i * 4;
+      const v = (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114) / 255;
+      sum += v; sum2 += v * v; n++;
+    }
+    const mean = sum / n;
+    const variance = sum2 / n - mean * mean;
+    return variance;
+  }
+
+  const varWhite = tryBackground('#fff');
+  const varBlack = tryBackground('#000');
+
+  // Pick the background that produces more contrast
+  const bestBg = varWhite >= varBlack ? '#fff' : '#000';
+  srcCtx.fillStyle = bestBg;
+  srcCtx.fillRect(0, 0, bW, bH);
+  srcCtx.drawImage(srcSVGImg, ox, oy, dw, dh);
+  console.log('[SVG Render]', Math.round(dw), 'x', Math.round(dh),
+    'bg:', bestBg, 'variance white:', varWhite.toFixed(4), 'black:', varBlack.toFixed(4));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1639,12 +1668,48 @@ function resetTimeline() {
 function exportSVG() {
   generateLines();
 
-  let paths = '';
+  // ── Base grid: perfectly straight, uniform-weight lines ──
+  let gridLines = '';
+  const count = Math.round(S.lineCount);
+  const dir = S.lineDir;
+  const sw = Math.max(S.weightMin, 0.5);
+
+  if (dir === 'horizontal') {
+    const spacing = H / count;
+    for (let i = 0; i < count; i++) {
+      const y = (spacing * (i + 0.5)).toFixed(2);
+      gridLines += `    <line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="${S.lineColor}" stroke-width="${sw}"/>\n`;
+    }
+  } else if (dir === 'vertical') {
+    const spacing = W / count;
+    for (let i = 0; i < count; i++) {
+      const x = (spacing * (i + 0.5)).toFixed(2);
+      gridLines += `    <line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="${S.lineColor}" stroke-width="${sw}"/>\n`;
+    }
+  } else if (dir === 'diagonal') {
+    const perpSpan = (W + H) / Math.SQRT2;
+    const spacing = perpSpan / count;
+    const dirX = 1 / Math.SQRT2, dirY = 1 / Math.SQRT2;
+    const normX = -dirY, normY = dirX;
+    const diagLen = Math.sqrt(W * W + H * H);
+    for (let i = 0; i < count; i++) {
+      const perpOff = spacing * (i + 0.5) - perpSpan / 2;
+      const cx = W / 2 + normX * perpOff;
+      const cy = H / 2 + normY * perpOff;
+      const x1 = (cx - dirX * diagLen / 2).toFixed(2);
+      const y1 = (cy - dirY * diagLen / 2).toFixed(2);
+      const x2 = (cx + dirX * diagLen / 2).toFixed(2);
+      const y2 = (cy + dirY * diagLen / 2).toFixed(2);
+      gridLines += `    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${S.lineColor}" stroke-width="${sw}"/>\n`;
+    }
+  }
+
+  // ── Effect: full variable-weight displaced paths ──
+  let effectPaths = '';
   for (const line of lines) {
     const pts = line.points;
     if (pts.length < 2) continue;
 
-    // Build upper and lower edges from per-point weight
     const upper = [];
     const lower = [];
     for (let i = 0; i < pts.length; i++) {
@@ -1666,29 +1731,32 @@ function exportSVG() {
       lower.push({ x: p.x - nx * hw, y: p.y - ny * hw });
     }
 
-    // Combine into a closed polygon and simplify with Paper.js
     const allPts = [...upper, ...lower.reverse()];
     let d = '';
     try {
       const paperPath = new paper.Path();
       for (const pt of allPts) paperPath.add(new paper.Point(pt.x, pt.y));
       paperPath.closePath();
-      paperPath.simplify(2.0); // higher tolerance = fewer points, cleaner curves
+      paperPath.simplify(2.0);
       d = paperPath.pathData;
       paperPath.remove();
     } catch (e) {
       d = 'M' + allPts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('L') + 'Z';
     }
 
-    paths += `  <path d="${d}" fill="${S.lineColor}"/>\n`;
+    effectPaths += `    <path d="${d}" fill="${S.lineColor}"/>\n`;
   }
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <rect width="${W}" height="${H}" fill="${S.bgColor}"/>
-${paths}</svg>`;
+  <g id="base-grid">
+${gridLines}  </g>
+  <g id="effect">
+${effectPaths}  </g>
+</svg>`;
 
-  downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), 'line-reveal.svg');
+  downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `line-reveal_${exportTimestamp()}.svg`);
 }
 
 /** Export PNG at given scale */
@@ -1704,7 +1772,7 @@ function exportPNG(scale) {
   for (const line of lines) drawLine(oCtx, line.points);
 
   offscreen.toBlob(blob => {
-    downloadBlob(blob, `line-reveal-${scale}x.png`);
+    downloadBlob(blob, `line-reveal_${exportTimestamp()}_${scale}x.png`);
   }, 'image/png');
 }
 
@@ -1781,7 +1849,7 @@ function exportGIF() {
 
       gif.on('finished', blob => {
         cleanupGif();
-        downloadBlob(blob, 'line-reveal.gif');
+        downloadBlob(blob, `line-reveal_${exportTimestamp()}.gif`);
       });
 
       gif.render();
@@ -2006,7 +2074,7 @@ async function exportMP4() {
     const videoBlob = new Blob([target.buffer], { type: chosen.mime });
     const sizeMB = (videoBlob.size / 1024 / 1024).toFixed(1);
     console.log(`[Video] Done! ${chosen.label}, ${sizeMB} MB, ${encW}x${encH}, ${pngBlobs.length} frames`);
-    downloadBlob(videoBlob, 'line-reveal' + chosen.ext);
+    downloadBlob(videoBlob, `line-reveal_${exportTimestamp()}${chosen.ext}`);
     gifEl.style.display = 'none';
 
   } catch (err) {
@@ -2061,7 +2129,7 @@ async function exportWebM() {
       generateLines();
 
       const blob = new Blob(chunks, { type: mimeType });
-      downloadBlob(blob, 'line-reveal.webm');
+      downloadBlob(blob, `line-reveal_${exportTimestamp()}.webm`);
       gifEl.style.display = 'none';
       resolve();
     };
@@ -2127,7 +2195,7 @@ async function exportPNGSequence() {
   $('#gif-bar-fill').style.width = '80%';
 
   const zipBlob = await zip.generateAsync({ type: 'blob' });
-  downloadBlob(zipBlob, 'line-reveal-frames.zip');
+  downloadBlob(zipBlob, `line-reveal_${exportTimestamp()}_frames.zip`);
   gifEl.style.display = 'none';
 }
 
@@ -2144,6 +2212,16 @@ function exportJSON() {
     new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
     'line-reveal-config.json'
   );
+}
+
+function exportTimestamp() {
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0') + '_' +
+    String(d.getHours()).padStart(2, '0') + '.' +
+    String(d.getMinutes()).padStart(2, '0') + '.' +
+    String(d.getSeconds()).padStart(2, '0');
 }
 
 function downloadBlob(blob, filename) {
@@ -2474,30 +2552,56 @@ function initUI() {
   $('#inp-svg').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    // Read SVG text (for potential SVG export features)
     const reader = new FileReader();
     reader.onload = (ev) => {
       srcSVG = ev.target.result;
+
+      // Patch SVG for reliable Image rendering
+      let patched = srcSVG;
+
+      // 1. xmlns is REQUIRED for rendering SVG in <img> — add if missing
+      if (!patched.includes('xmlns=')) {
+        patched = patched.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+
+      // 2. Force explicit pixel dimensions — percentage, em, or missing sizes
+      //    cause SVGs to render at 0x0 or 300x150 default in Image context
+      const hasValidWidth = /\bwidth=["']\d+(\.\d+)?(px)?["']/.test(patched)
+                         && !/\bwidth=["'][^"']*%["']/.test(patched);
+      if (!hasValidWidth) {
+        // Strip any existing width/height
+        patched = patched.replace(/\bwidth=["'][^"']*["']/g, '');
+        patched = patched.replace(/\bheight=["'][^"']*["']/g, '');
+        // Add explicit dimensions
+        patched = patched.replace('<svg', '<svg width="800" height="800"');
+      }
+
+      console.log('[SVG] Patched SVG, has xmlns:', patched.includes('xmlns='),
+                  'has explicit dimensions:', /\bwidth=["']\d/.test(patched));
+
+      // 3. Load via data URL — more reliable than blob URL for SVGs
+      const dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(patched);
+      const img = new Image();
+      img.onload = () => {
+        srcSVGImg = img;
+        $('#zone-svg').classList.add('has-file');
+        $('#btn-clear-svg').style.display = 'inline-block';
+        // Show preview thumbnail
+        let preview = $('#svg-preview');
+        if (preview) {
+          preview.src = dataUrl;
+          preview.style.display = 'block';
+        }
+        console.log('[SVG] Image loaded:', img.naturalWidth, 'x', img.naturalHeight);
+        scheduleUpdate();
+      };
+      img.onerror = (err) => {
+        console.error('[SVG] Failed to load as image:', err);
+        alert('Could not load SVG. Make sure it is a valid SVG file.');
+      };
+      img.src = dataUrl;
     };
     reader.readAsText(file);
-
-    // Load Image directly from File blob URL (most reliable method)
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      srcSVGImg = img;
-      $('#zone-svg').classList.add('has-file');
-      $('#btn-clear-svg').style.display = 'inline-block';
-      console.log('[SVG] Loaded:', img.naturalWidth, 'x', img.naturalHeight);
-      scheduleUpdate();
-    };
-    img.onerror = (err) => {
-      console.error('[SVG] Failed to load as image:', err);
-      URL.revokeObjectURL(url);
-      alert('Could not load SVG. Make sure it is a valid SVG file.');
-    };
-    img.src = url;
   });
 
   $('#btn-clear-svg').addEventListener('click', () => {
@@ -2505,6 +2609,8 @@ function initUI() {
     srcSVGImg = null;
     $('#zone-svg').classList.remove('has-file');
     $('#btn-clear-svg').style.display = 'none';
+    let preview = $('#svg-preview');
+    if (preview) { preview.style.display = 'none'; preview.src = ''; }
     $('#inp-svg').value = '';
     scheduleUpdate();
   });
